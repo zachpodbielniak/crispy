@@ -41,8 +41,6 @@ static gboolean  opt_dry_run      = FALSE;
 static gboolean  opt_clean_cache  = FALSE;
 static gboolean  opt_version      = FALSE;
 static gboolean  opt_license      = FALSE;
-static gchar   **opt_remaining    = NULL;
-
 static GOptionEntry entries[] =
 {
     {
@@ -85,10 +83,6 @@ static GOptionEntry entries[] =
         "license", 0, 0, G_OPTION_ARG_NONE, &opt_license,
         "Show license (AGPLv3)", NULL
     },
-    {
-        G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_STRING_ARRAY,
-        &opt_remaining, NULL, "[SCRIPT] [SCRIPT_ARGS...]"
-    },
     { NULL }
 };
 
@@ -110,6 +104,95 @@ on_signal(
     return G_SOURCE_REMOVE;
 }
 
+/**
+ * split_argv:
+ * @argc: original argument count
+ * @argv: original argument vector
+ * @crispy_argc: (out): argument count for crispy options (including argv[0])
+ * @crispy_argv: (out) (transfer full): new argv for crispy options
+ * @script_argc: (out): argument count for the script (script path + its args)
+ * @script_argv: (out): pointer into original argv at the script path
+ *
+ * Scans argv to find the first non-option argument (the script path).
+ * Everything before it is crispy's options; everything from it onward
+ * is the script's argv. This ensures that flags after the script path
+ * (e.g., `crispy script.c -f blah`) are passed to the script, not
+ * interpreted by crispy.
+ *
+ * A non-option argument is one that does not start with '-', or is
+ * literally "-" (stdin mode). Options that take a value argument
+ * (-i, -I, -p) consume the next argv entry as well.
+ */
+static void
+split_argv(
+    gint     argc,
+    gchar  **argv,
+    gint    *crispy_argc,
+    gchar ***crispy_argv,
+    gint    *script_argc,
+    gchar ***script_argv
+){
+    gint split_pos;
+    gint i;
+    gint j;
+
+    split_pos = argc; /* default: no script found, everything is crispy's */
+
+    for (i = 1; i < argc; i++)
+    {
+        /* literal "-" is stdin mode -- it's the script arg */
+        if (strcmp(argv[i], "-") == 0)
+        {
+            split_pos = i;
+            break;
+        }
+
+        /* "--" ends option parsing, next arg is the script */
+        if (strcmp(argv[i], "--") == 0)
+        {
+            split_pos = i + 1;
+            break;
+        }
+
+        /* not an option -- this is the script path */
+        if (argv[i][0] != '-')
+        {
+            split_pos = i;
+            break;
+        }
+
+        /* options that consume the next argument as their value */
+        if (strcmp(argv[i], "-i") == 0 ||
+            strcmp(argv[i], "--inline") == 0 ||
+            strcmp(argv[i], "-I") == 0 ||
+            strcmp(argv[i], "--include") == 0 ||
+            strcmp(argv[i], "-p") == 0 ||
+            strcmp(argv[i], "--preload") == 0)
+        {
+            i++; /* skip the value argument */
+        }
+    }
+
+    /* build crispy's argv: argv[0] + everything before split_pos */
+    *crispy_argc = split_pos;
+    *crispy_argv = g_new0(gchar *, split_pos + 1);
+    for (j = 0; j < split_pos; j++)
+        (*crispy_argv)[j] = g_strdup(argv[j]);
+    (*crispy_argv)[split_pos] = NULL;
+
+    /* script's argv: everything from split_pos onward */
+    if (split_pos < argc)
+    {
+        *script_argc = argc - split_pos;
+        *script_argv = &argv[split_pos];
+    }
+    else
+    {
+        *script_argc = 0;
+        *script_argv = NULL;
+    }
+}
+
 gint
 main(
     gint    argc,
@@ -122,6 +205,8 @@ main(
     g_autoptr(CrispyScript) script = NULL;
     CrispyFlags flags;
     GModule *preloaded_lib;
+    gint crispy_argc;
+    gchar **crispy_argv;
     gint script_argc;
     gchar **script_argv;
     gint exit_code;
@@ -130,24 +215,38 @@ main(
     preloaded_lib = NULL;
     exit_code = 0;
 
+    /*
+     * Split argv before GOptionContext sees it. Everything after the
+     * script path (first non-option arg) belongs to the script, not
+     * to crispy. This means `crispy script.c -f blah` passes "-f blah"
+     * to the script, while `crispy -n script.c` gives crispy the -n flag.
+     */
+    split_argv(argc, argv, &crispy_argc, &crispy_argv,
+               &script_argc, &script_argv);
+
     /* set up option context */
     context = g_option_context_new("[SCRIPT] [ARGS...] - GLib-native C scripting");
     g_option_context_set_summary(context,
         "Crispy Really Is Super Powerful Yo\n"
         "Compile and run C scripts with GLib/GObject/GIO support.\n"
         "\n"
+        "Arguments after the script path are passed to the script, not crispy.\n"
+        "\n"
         "Examples:\n"
         "  crispy script.c\n"
         "  crispy script.c arg1 arg2\n"
+        "  crispy script.c -f blah        (script sees -f blah)\n"
+        "  crispy -n script.c             (crispy gets -n, script sees no args)\n"
         "  crispy -i 'g_print(\"hello\\n\"); return 0;'\n"
         "  echo 'g_print(\"hello\\n\"); return 0;' | crispy -\n"
         "  crispy --gdb script.c\n"
         "  chmod +x script.c && ./script.c  (with #!/usr/bin/crispy shebang)");
     g_option_context_add_main_entries(context, entries, NULL);
 
-    if (!g_option_context_parse(context, &argc, &argv, &error))
+    if (!g_option_context_parse(context, &crispy_argc, &crispy_argv, &error))
     {
         g_printerr("Error: %s\n", error->message);
+        g_strfreev(crispy_argv);
         return 1;
     }
 
@@ -155,12 +254,14 @@ main(
     if (opt_version)
     {
         g_print("crispy %s\n", CRISPY_VERSION_STRING);
+        g_strfreev(crispy_argv);
         return 0;
     }
 
     if (opt_license)
     {
         g_print("%s", CRISPY_LICENSE_TEXT);
+        g_strfreev(crispy_argv);
         return 0;
     }
 
@@ -169,6 +270,7 @@ main(
     if (compiler == NULL)
     {
         g_printerr("Error: %s\n", error->message);
+        g_strfreev(crispy_argv);
         return 1;
     }
 
@@ -180,8 +282,10 @@ main(
         if (!crispy_cache_provider_purge(CRISPY_CACHE_PROVIDER(cache), &error))
         {
             g_printerr("Error: %s\n", error->message);
+            g_strfreev(crispy_argv);
             return 1;
         }
+        g_strfreev(crispy_argv);
         return 0;
     }
 
@@ -204,6 +308,7 @@ main(
         {
             g_printerr("Error: Failed to preload '%s': %s\n",
                         opt_preload, g_module_error());
+            g_strfreev(crispy_argv);
             return 1;
         }
     }
@@ -213,12 +318,7 @@ main(
     g_unix_signal_add(SIGTERM, on_signal, NULL);
 
     /* determine mode and create script */
-    is_stdin = FALSE;
-    if (opt_remaining != NULL && opt_remaining[0] != NULL &&
-        strcmp(opt_remaining[0], "-") == 0)
-    {
-        is_stdin = TRUE;
-    }
+    is_stdin = (script_argc > 0 && strcmp(script_argv[0], "-") == 0);
 
     if (opt_inline != NULL)
     {
@@ -229,36 +329,24 @@ main(
             CRISPY_CACHE_PROVIDER(cache),
             flags, &error);
 
-        /* script args are all of opt_remaining */
-        script_argc = 0;
-        script_argv = NULL;
-        if (opt_remaining != NULL)
-        {
-            script_argc = (gint)g_strv_length(opt_remaining);
-            script_argv = opt_remaining;
-        }
+        /* all split-off args go to the script */
     }
     else if (is_stdin)
     {
-        /* stdin mode: crispy - */
+        /* stdin mode: crispy - [args...] */
         script = crispy_script_new_from_stdin(
             CRISPY_COMPILER(compiler),
             CRISPY_CACHE_PROVIDER(cache),
             flags, &error);
 
-        /* script args are opt_remaining[1..] */
-        script_argc = 0;
-        script_argv = NULL;
-        if (opt_remaining != NULL && g_strv_length(opt_remaining) > 1)
-        {
-            script_argc = (gint)g_strv_length(opt_remaining) - 1;
-            script_argv = &opt_remaining[1];
-        }
+        /* skip the "-" itself, pass remaining to script */
+        script_argv++;
+        script_argc--;
     }
     else
     {
-        /* file mode: crispy script.c [args...] */
-        if (opt_remaining == NULL || opt_remaining[0] == NULL)
+        /* file mode: crispy [opts] script.c [script_args...] */
+        if (script_argc == 0)
         {
             g_printerr("Error: No script file specified.\n"
                         "Try 'crispy --help' for usage information.\n");
@@ -267,22 +355,10 @@ main(
         }
 
         script = crispy_script_new_from_file(
-            opt_remaining[0],
+            script_argv[0],
             CRISPY_COMPILER(compiler),
             CRISPY_CACHE_PROVIDER(cache),
             flags, &error);
-
-        /* script args: argv[0] = script name, then remaining args */
-        if (g_strv_length(opt_remaining) > 1)
-        {
-            script_argc = (gint)g_strv_length(opt_remaining);
-            script_argv = opt_remaining;
-        }
-        else
-        {
-            script_argc = 1;
-            script_argv = opt_remaining;
-        }
     }
 
     if (script == NULL)
@@ -317,7 +393,7 @@ cleanup:
     g_free(g_temp_source_path);
     g_temp_source_path = NULL;
 
-    g_strfreev(opt_remaining);
+    g_strfreev(crispy_argv);
     g_free(opt_inline);
     g_free(opt_include);
     g_free(opt_preload);
