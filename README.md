@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="data/logo2.jpg" alt="Crispy Logo" width="256">
+</p>
+
 # Crispy
 
 **Crispy Really Is Super Powerful Yo**
