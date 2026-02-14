@@ -14,8 +14,11 @@ VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
 # Installation directories
 PREFIX ?= /usr/local
+
+# Auto-detect lib vs lib64: use lib64 on 64-bit systems where it exists
+LIBSUFFIX ?= $(if $(wildcard /usr/lib64),lib64,lib)
 BINDIR ?= $(PREFIX)/bin
-LIBDIR ?= $(PREFIX)/lib
+LIBDIR ?= $(PREFIX)/$(LIBSUFFIX)
 INCLUDEDIR ?= $(PREFIX)/include
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
@@ -125,6 +128,7 @@ show-config:
 	@echo "CFLAGS:       $(CFLAGS)"
 	@echo "LDFLAGS:      $(LDFLAGS)"
 	@echo "PREFIX:       $(PREFIX)"
+	@echo "LIBDIR:       $(LIBDIR)"
 	@echo "DEBUG:        $(DEBUG)"
 	@echo "ASAN:         $(ASAN)"
 	@echo "BUILD_GIR:    $(BUILD_GIR)"

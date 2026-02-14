@@ -111,16 +111,18 @@ ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
 
-install-bin: $(OUTDIR)/crispy
+install-bin: $(MAIN_OBJ) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(BINDIR)
-	$(INSTALL_PROGRAM) $(OUTDIR)/crispy $(DESTDIR)$(BINDIR)/crispy
+	$(CC) -o $(DESTDIR)$(BINDIR)/crispy $(MAIN_OBJ) \
+		-L$(OUTDIR) -lcrispy $(LDFLAGS) -Wl,-rpath,$(LIBDIR)
 
 install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(LIBDIR)
+	$(INSTALL_PROGRAM) $(OUTDIR)/$(LIB_SHARED_FULL) $(DESTDIR)$(LIBDIR)/
 	$(INSTALL_DATA) $(OUTDIR)/$(LIB_STATIC) $(DESTDIR)$(LIBDIR)/
-	$(INSTALL_DATA) $(OUTDIR)/$(LIB_SHARED_FULL) $(DESTDIR)$(LIBDIR)/
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_FULL) $(LIB_SHARED_MAJOR)
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_MAJOR) $(LIB_SHARED)
+	-ldconfig 2>/dev/null || true
 
 install-headers:
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/crispy
