@@ -39,6 +39,7 @@ static gboolean  opt_preserve     = FALSE;
 static gboolean  opt_gdb          = FALSE;
 static gboolean  opt_dry_run      = FALSE;
 static gboolean  opt_clean_cache  = FALSE;
+static gchar    *opt_plugins      = NULL;
 static gboolean  opt_version      = FALSE;
 static gboolean  opt_license      = FALSE;
 static GOptionEntry entries[] =
@@ -70,6 +71,10 @@ static GOptionEntry entries[] =
     {
         "dry-run", 0, 0, G_OPTION_ARG_NONE, &opt_dry_run,
         "Show compilation command without executing", NULL
+    },
+    {
+        "plugins", 'P', 0, G_OPTION_ARG_STRING, &opt_plugins,
+        "Load plugins (colon-or-comma-separated .so paths)", "PATHS"
     },
     {
         "clean-cache", 0, 0, G_OPTION_ARG_NONE, &opt_clean_cache,
@@ -167,7 +172,9 @@ split_argv(
             strcmp(argv[i], "-I") == 0 ||
             strcmp(argv[i], "--include") == 0 ||
             strcmp(argv[i], "-p") == 0 ||
-            strcmp(argv[i], "--preload") == 0)
+            strcmp(argv[i], "--preload") == 0 ||
+            strcmp(argv[i], "-P") == 0 ||
+            strcmp(argv[i], "--plugins") == 0)
         {
             i++; /* skip the value argument */
         }
@@ -202,6 +209,7 @@ main(
     g_autoptr(GError) error = NULL;
     g_autoptr(CrispyGccCompiler) compiler = NULL;
     g_autoptr(CrispyFileCache) cache = NULL;
+    g_autoptr(CrispyPluginEngine) engine = NULL;
     g_autoptr(CrispyScript) script = NULL;
     CrispyFlags flags;
     GModule *preloaded_lib;
@@ -275,6 +283,18 @@ main(
     }
 
     cache = crispy_file_cache_new();
+
+    /* load plugins if requested */
+    if (opt_plugins != NULL)
+    {
+        engine = crispy_plugin_engine_new();
+        if (!crispy_plugin_engine_load_paths(engine, opt_plugins, &error))
+        {
+            g_printerr("Error: %s\n", error->message);
+            g_strfreev(crispy_argv);
+            return 1;
+        }
+    }
 
     /* handle --clean-cache */
     if (opt_clean_cache)
@@ -368,6 +388,10 @@ main(
         goto cleanup;
     }
 
+    /* attach plugin engine if loaded */
+    if (engine != NULL)
+        crispy_script_set_plugin_engine(script, engine);
+
     /* track temp source path for signal cleanup */
     g_temp_source_path = g_strdup(crispy_script_get_temp_source_path(script));
 
@@ -397,6 +421,7 @@ cleanup:
     g_free(opt_inline);
     g_free(opt_include);
     g_free(opt_preload);
+    g_free(opt_plugins);
 
     return exit_code;
 }

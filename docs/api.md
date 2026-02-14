@@ -48,7 +48,8 @@ typedef enum
     CRISPY_ERROR_IO,
     CRISPY_ERROR_PARAMS,
     CRISPY_ERROR_CACHE,
-    CRISPY_ERROR_GCC_NOT_FOUND
+    CRISPY_ERROR_GCC_NOT_FOUND,
+    CRISPY_ERROR_PLUGIN
 } CrispyError;
 ```
 
@@ -63,6 +64,59 @@ Error codes for the `CRISPY_ERROR` domain.
 | `CRISPY_ERROR_PARAMS` | Error parsing CRISPY_PARAMS |
 | `CRISPY_ERROR_CACHE` | Cache operation failed |
 | `CRISPY_ERROR_GCC_NOT_FOUND` | gcc binary not found |
+| `CRISPY_ERROR_PLUGIN` | Plugin load or hook failure |
+
+### CrispyHookPoint
+
+```c
+typedef enum
+{
+    CRISPY_HOOK_SOURCE_LOADED = 0,
+    CRISPY_HOOK_PARAMS_EXPANDED,
+    CRISPY_HOOK_HASH_COMPUTED,
+    CRISPY_HOOK_CACHE_CHECKED,
+    CRISPY_HOOK_PRE_COMPILE,
+    CRISPY_HOOK_POST_COMPILE,
+    CRISPY_HOOK_MODULE_LOADED,
+    CRISPY_HOOK_PRE_EXECUTE,
+    CRISPY_HOOK_POST_EXECUTE,
+    CRISPY_HOOK_POINT_COUNT
+} CrispyHookPoint;
+```
+
+Hook points in the script execution pipeline.
+
+| Value | Description |
+|-------|-------------|
+| `CRISPY_HOOK_SOURCE_LOADED` | After source parsed, shebang/params stripped |
+| `CRISPY_HOOK_PARAMS_EXPANDED` | After CRISPY_PARAMS shell expansion |
+| `CRISPY_HOOK_HASH_COMPUTED` | After SHA256 cache key computed |
+| `CRISPY_HOOK_CACHE_CHECKED` | After cache lookup (hit or miss) |
+| `CRISPY_HOOK_PRE_COMPILE` | Before gcc invocation (cache miss only) |
+| `CRISPY_HOOK_POST_COMPILE` | After successful compilation |
+| `CRISPY_HOOK_MODULE_LOADED` | After g_module_open() of compiled .so |
+| `CRISPY_HOOK_PRE_EXECUTE` | Before calling main() |
+| `CRISPY_HOOK_POST_EXECUTE` | After main() returns |
+| `CRISPY_HOOK_POINT_COUNT` | Total number of hook points (not a valid hook) |
+
+### CrispyHookResult
+
+```c
+typedef enum
+{
+    CRISPY_HOOK_CONTINUE = 0,
+    CRISPY_HOOK_ABORT,
+    CRISPY_HOOK_FORCE_RECOMPILE
+} CrispyHookResult;
+```
+
+Return value from hook functions indicating how the pipeline should proceed.
+
+| Value | Description |
+|-------|-------------|
+| `CRISPY_HOOK_CONTINUE` | Proceed normally to the next phase |
+| `CRISPY_HOOK_ABORT` | Stop the pipeline (plugin should set `ctx->error`) |
+| `CRISPY_HOOK_FORCE_RECOMPILE` | Force recompilation even on cache hit (only meaningful from `CACHE_CHECKED`) |
 
 ---
 
@@ -75,6 +129,53 @@ typedef gint (*CrispyMainFunc)(gint argc, gchar **argv);
 ```
 
 Function pointer type for the script's `main()` entry point.
+
+### CrispyPluginInfo
+
+```c
+typedef struct
+{
+    const gchar *name;
+    const gchar *description;
+    const gchar *version;
+    const gchar *author;
+    const gchar *license;
+} CrispyPluginInfo;
+```
+
+Metadata descriptor that every plugin must export as the symbol `crispy_plugin_info`. Use `CRISPY_PLUGIN_DEFINE()` to generate it.
+
+### CrispyHookContext
+
+```c
+typedef struct _CrispyHookContext CrispyHookContext;
+```
+
+Context structure passed to every hook function. Contains both read-only pipeline state and mutable fields that plugins can modify to alter execution behavior. See [docs/plugins.md](plugins.md) for full field reference.
+
+### CrispyPluginHookFunc
+
+```c
+typedef CrispyHookResult (*CrispyPluginHookFunc)(CrispyHookContext *ctx);
+```
+
+Function signature for all hook callbacks. Plugins export functions named `crispy_plugin_on_<hook_name>` matching this signature.
+
+### CrispyPluginInitFunc
+
+```c
+typedef gpointer (*CrispyPluginInitFunc)(void);
+```
+
+Optional plugin initialization function. Called once when the plugin is loaded. The return value is stored as `plugin_data` and passed to every hook invocation.
+
+### CrispyPluginShutdownFunc
+
+```c
+typedef void (*CrispyPluginShutdownFunc)(gpointer plugin_data);
+```
+
+Optional plugin shutdown function. Called once when the plugin engine is finalized.
 
 ---
 
@@ -103,6 +204,14 @@ The hash algorithm used for cache keys.
 ```
 
 Maximum length of the CRISPY_PARAMS define value.
+
+### CRISPY_PLUGIN_DEFINE
+
+```c
+#define CRISPY_PLUGIN_DEFINE(name, description, version, author, license)
+```
+
+Convenience macro that generates the mandatory `crispy_plugin_info` symbol with the given metadata fields. Every plugin must use this macro exactly once.
 
 ### Version Macros
 
@@ -343,6 +452,111 @@ Returns the path to the cache directory.
 
 ---
 
+## CrispyPluginEngine (Final Type)
+
+**Type macro:** `CRISPY_TYPE_PLUGIN_ENGINE`
+
+**Check macro:** `CRISPY_IS_PLUGIN_ENGINE(obj)`
+
+**Cast macro:** `CRISPY_PLUGIN_ENGINE(obj)`
+
+### crispy_plugin_engine_new
+
+```c
+CrispyPluginEngine *
+crispy_plugin_engine_new(void);
+```
+
+Creates a new empty plugin engine with no plugins loaded.
+
+**Returns:** (transfer full) a new CrispyPluginEngine
+
+### crispy_plugin_engine_load
+
+```c
+gboolean
+crispy_plugin_engine_load(CrispyPluginEngine  *self,
+                          const gchar         *path,
+                          GError             **error);
+```
+
+Loads a single plugin from the given path. The plugin must export a `crispy_plugin_info` symbol. If the plugin exports a `crispy_plugin_init` function, it is called immediately.
+
+**Parameters:**
+- `self` -- a CrispyPluginEngine
+- `path` -- path to a plugin .so file
+- `error` -- return location for a GError, or NULL
+
+**Returns:** TRUE on success, FALSE on error
+
+### crispy_plugin_engine_load_paths
+
+```c
+gboolean
+crispy_plugin_engine_load_paths(CrispyPluginEngine  *self,
+                                const gchar         *paths,
+                                GError             **error);
+```
+
+Splits `paths` on `:` and `,` delimiters, then loads each path via `crispy_plugin_engine_load()`. Stops on the first failure.
+
+**Parameters:**
+- `self` -- a CrispyPluginEngine
+- `paths` -- colon-or-comma-separated list of plugin .so paths
+- `error` -- return location for a GError, or NULL
+
+**Returns:** TRUE if all plugins loaded, FALSE on first error
+
+### crispy_plugin_engine_get_plugin_count
+
+```c
+guint
+crispy_plugin_engine_get_plugin_count(CrispyPluginEngine *self);
+```
+
+Returns the number of currently loaded plugins.
+
+**Parameters:**
+- `self` -- a CrispyPluginEngine
+
+**Returns:** the plugin count
+
+### crispy_plugin_engine_set_data
+
+```c
+void
+crispy_plugin_engine_set_data(CrispyPluginEngine *self,
+                              const gchar        *key,
+                              gpointer            data,
+                              GDestroyNotify      destroy);
+```
+
+Stores arbitrary data in the engine's shared data store, keyed by `key`. This allows inter-plugin communication. If `key` already exists, the old value is freed via its destroy notify.
+
+**Parameters:**
+- `self` -- a CrispyPluginEngine
+- `key` -- a string key for the data
+- `data` -- (nullable) the data to store
+- `destroy` -- (nullable) destroy notify for `data`
+
+### crispy_plugin_engine_get_data
+
+```c
+gpointer
+crispy_plugin_engine_get_data(CrispyPluginEngine *self,
+                              const gchar        *key);
+```
+
+Retrieves data previously stored with `crispy_plugin_engine_set_data()`.
+
+**Parameters:**
+- `self` -- a CrispyPluginEngine
+- `key` -- a string key to look up
+
+**Returns:** (transfer none) (nullable) the stored data, or NULL
+
+---
+
 ## CrispyScript (Final Type)
 
 **Type macro:** `CRISPY_TYPE_SCRIPT`
@@ -464,6 +678,20 @@ Returns the path to the temporary modified source file. Only meaningful with `CR
 - `self` -- a CrispyScript
 
 **Returns:** (transfer none) (nullable) the temp source path
+
+### crispy_script_set_plugin_engine
+
+```c
+void
+crispy_script_set_plugin_engine(CrispyScript       *self,
+                                CrispyPluginEngine *engine);
+```
+
+Sets the plugin engine for this script. When set, hook functions from loaded plugins are dispatched at each phase of the execution pipeline. If `engine` is NULL, no hooks fire (default behavior). This must be called before `crispy_script_execute()`.
+
+**Parameters:**
+- `self` -- a CrispyScript
+- `engine` -- (transfer none) (nullable) a CrispyPluginEngine, or NULL
 
 ---
 

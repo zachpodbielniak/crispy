@@ -30,6 +30,7 @@ LIB_SRCS := \
 	src/interfaces/crispy-cache-provider.c \
 	src/core/crispy-gcc-compiler.c \
 	src/core/crispy-file-cache.c \
+	src/core/crispy-plugin-engine.c \
 	src/core/crispy-script.c
 
 # Header files (for GIR scanner and installation)
@@ -37,20 +38,17 @@ LIB_HDRS := \
 	src/crispy.h \
 	src/crispy-types.h \
 	src/crispy-version.h \
+	src/crispy-plugin.h \
 	src/interfaces/crispy-compiler.h \
 	src/interfaces/crispy-cache-provider.h \
 	src/core/crispy-gcc-compiler.h \
 	src/core/crispy-file-cache.h \
+	src/core/crispy-plugin-engine.h \
 	src/core/crispy-script.h
-
-# Test sources
-TEST_SRCS := $(wildcard tests/test-*.c)
 
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
 MAIN_OBJ := $(OBJDIR)/main.o
-TEST_OBJS := $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
-TEST_BINS := $(patsubst tests/%.c,$(OUTDIR)/%,$(TEST_SRCS))
 
 # Include build rules
 include rules.mk
@@ -70,8 +68,24 @@ crispy: lib $(OUTDIR)/crispy
 # Build GIR/typelib
 gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
 
+# Test plugin .so files (not test binaries)
+TEST_PLUGIN_SRCS := \
+	tests/test-plugin-noop.c \
+	tests/test-plugin-hooks.c \
+	tests/test-plugin-abort.c
+TEST_PLUGIN_SOS  := $(patsubst tests/test-plugin-%.c,$(OUTDIR)/test-plugin-%.so,$(TEST_PLUGIN_SRCS))
+
+# Exclude test-plugin-*.c from the test binary sources
+TEST_SRCS := $(filter-out $(TEST_PLUGIN_SRCS),$(wildcard tests/test-*.c))
+TEST_OBJS := $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
+TEST_BINS := $(patsubst tests/%.c,$(OUTDIR)/%,$(TEST_SRCS))
+
+# Build test plugin .so files
+$(OUTDIR)/test-plugin-%.so: tests/test-plugin-%.c $(OUTDIR)/$(LIB_SHARED_FULL)
+	$(CC) $(CFLAGS) -shared -o $@ $< $(LDFLAGS)
+
 # Build and run tests
-test: lib $(TEST_BINS)
+test: lib $(TEST_PLUGIN_SOS) $(TEST_BINS)
 	@echo "Running tests..."
 	@failed=0; \
 	for test in $(TEST_BINS); do \

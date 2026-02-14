@@ -18,7 +18,7 @@ Three-file GNU Make split (same pattern as `../gst`):
 make                    # Release build -> build/release/
 make DEBUG=1            # Debug build -> build/debug/
 make DEBUG=1 ASAN=1     # Debug + AddressSanitizer
-make test               # Build and run all 35 GTest tests
+make test               # Build and run all 47 GTest tests
 make clean              # Clean current build type
 make clean-all          # Clean everything including generated headers
 make install-deps       # Install Fedora build deps (glib2-devel, gcc, etc.)
@@ -35,6 +35,7 @@ Build artifacts go to `build/{debug,release}/`. The executable links with `-Wl,-
 src/
   crispy.h                          # Umbrella header (include this, not individual headers)
   crispy-types.h                    # Forward declarations, CrispyFlags, CrispyError, CrispyMainFunc
+  crispy-plugin.h                   # Public plugin author header (hook types, context, macros)
   crispy-version.h.in               # Version template (sed-generated -> crispy-version.h)
   interfaces/
     crispy-compiler.h/.c            # CrispyCompiler GInterface
@@ -42,6 +43,8 @@ src/
   core/
     crispy-gcc-compiler.h/.c        # CrispyGccCompiler (implements CrispyCompiler)
     crispy-file-cache.h/.c          # CrispyFileCache (implements CrispyCacheProvider)
+    crispy-plugin-engine.h/.c       # CrispyPluginEngine (final type, plugin loading/dispatch)
+    crispy-plugin-engine-private.h  # Internal dispatch declaration (not installed)
     crispy-script.h/.c              # CrispyScript (final type, orchestrator)
   main.c                            # CLI entry point (GOptionContext)
 tests/
@@ -49,10 +52,18 @@ tests/
   test-file-cache.c                 # 11 tests
   test-script.c                     # 8 tests (end-to-end, needs gcc at runtime)
   test-interfaces.c                 # 7 tests
+  test-plugin-engine.c              # 12 tests (plugin engine, needs test plugin .so files)
+  test-plugin-noop.c                # Test plugin: minimal (info only)
+  test-plugin-hooks.c               # Test plugin: tracks hook calls via bitmask
+  test-plugin-abort.c               # Test plugin: aborts at PRE_EXECUTE
 examples/
   hello.c, args.c, file-io.c, math.c
+  plugins/
+    plugin-timing.c                 # Example: per-phase timing report to stderr
+    plugin-source-guard.c           # Example: rejects dangerous function calls
+    Makefile                        # Builds example plugins
 docs/
-  scripting.md, architecture.md, api.md
+  scripting.md, architecture.md, api.md, plugins.md
 ```
 
 ## Architecture
@@ -66,7 +77,8 @@ Concrete implementations:
 
 - **CrispyGccCompiler** -- `G_DECLARE_FINAL_TYPE`, implements CrispyCompiler via gcc
 - **CrispyFileCache** -- `G_DECLARE_FINAL_TYPE`, implements CrispyCacheProvider via `~/.cache/crispy/`
-- **CrispyScript** -- `G_DECLARE_FINAL_TYPE`, takes interfaces as constructor args, orchestrates the full pipeline
+- **CrispyPluginEngine** -- `G_DECLARE_FINAL_TYPE`, loads/dispatches plugin .so files via GModule
+- **CrispyScript** -- `G_DECLARE_FINAL_TYPE`, takes interfaces as constructor args, orchestrates the full pipeline (with optional plugin hooks)
 
 All final types use `G_DEFINE_FINAL_TYPE_WITH_CODE` with `G_ADD_PRIVATE` and `G_IMPLEMENT_INTERFACE`. The instance struct is defined in the `.c` file (not the header) since `G_DECLARE_FINAL_TYPE` hides it.
 
@@ -141,6 +153,7 @@ Use the component name as scope when applicable:
 - `cache` -- CrispyCacheProvider interface or CrispyFileCache
 - `script` -- CrispyScript
 - `cli` -- main.c / CLI behavior
+- `plugin` -- crispy-plugin.h, CrispyPluginEngine, plugin system
 - `types` -- crispy-types.h (flags, error codes, typedefs)
 
 Scope is optional for broad changes that span multiple components.

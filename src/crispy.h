@@ -23,10 +23,12 @@
 
 #include "crispy-types.h"
 #include "crispy-version.h"
+#include "crispy-plugin.h"
 #include "interfaces/crispy-compiler.h"
 #include "interfaces/crispy-cache-provider.h"
 #include "core/crispy-gcc-compiler.h"
 #include "core/crispy-file-cache.h"
+#include "core/crispy-plugin-engine.h"
 #include "core/crispy-script.h"
 
 #undef CRISPY_INSIDE

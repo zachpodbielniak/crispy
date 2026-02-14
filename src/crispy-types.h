@@ -18,6 +18,7 @@ typedef struct _CrispyCacheProviderInterface CrispyCacheProviderInterface;
 typedef struct _CrispyGccCompiler      CrispyGccCompiler;
 typedef struct _CrispyFileCache        CrispyFileCache;
 typedef struct _CrispyScript           CrispyScript;
+typedef struct _CrispyPluginEngine     CrispyPluginEngine;
 
 /**
  * CrispyFlags:
@@ -81,6 +82,7 @@ GQuark crispy_error_quark (void);
  * @CRISPY_ERROR_PARAMS: Error parsing CRISPY_PARAMS.
  * @CRISPY_ERROR_CACHE: Cache operation failed.
  * @CRISPY_ERROR_GCC_NOT_FOUND: gcc binary not found.
+ * @CRISPY_ERROR_PLUGIN: Plugin operation failed.
  *
  * Error codes for the %CRISPY_ERROR domain.
  */
@@ -92,7 +94,8 @@ typedef enum
     CRISPY_ERROR_IO,
     CRISPY_ERROR_PARAMS,
     CRISPY_ERROR_CACHE,
-    CRISPY_ERROR_GCC_NOT_FOUND
+    CRISPY_ERROR_GCC_NOT_FOUND,
+    CRISPY_ERROR_PLUGIN
 } CrispyError;
 
 G_END_DECLS

@@ -15,24 +15,36 @@ Crispy is structured as a GObject library (`libcrispy`) with a thin CLI frontend
                     │  - source parsing │
                     │  - pipeline exec  │
                     │  - GModule load   │
-                    └──┬───────────┬───┘
-                       │           │
-              uses     │           │  uses
-          ┌────────────▼──┐   ┌───▼──────────────┐
-          │ CrispyCompiler │   │ CrispyCacheProvider│
-          │  (GInterface)  │   │   (GInterface)     │
-          └────────┬───────┘   └──────┬─────────────┘
-                   │                  │
-          implements               implements
-                   │                  │
-     ┌─────────────▼──────┐  ┌───────▼──────────┐
-     │ CrispyGccCompiler   │  │ CrispyFileCache   │
-     │ (Final type)        │  │ (Final type)       │
-     │                     │  │                    │
-     │ - gcc invocation    │  │ - SHA256 hashing   │
-     │ - pkg-config flags  │  │ - ~/.cache/crispy/ │
-     │ - version detection │  │ - mtime validation │
-     └────────────────────┘  └────────────────────┘
+                    │  - plugin hooks   │
+                    └──┬──────┬────┬───┘
+                       │      │    │
+              uses     │      │    │ optional
+          ┌────────────▼──┐   │   ┌▼─────────────────┐
+          │ CrispyCompiler │   │   │ CrispyPluginEngine│
+          │  (GInterface)  │   │   │ (Final type)      │
+          └────────┬───────┘   │   │                   │
+                   │           │   │ - load .so plugins │
+          implements           │   │ - dispatch hooks   │
+                   │           │   │ - data store       │
+     ┌─────────────▼──────┐   │   └───────────────────┘
+     │ CrispyGccCompiler   │   │
+     │ (Final type)        │   │  uses
+     │                     │   │
+     │ - gcc invocation    │  ┌▼──────────────────┐
+     │ - pkg-config flags  │  │ CrispyCacheProvider│
+     │ - version detection │  │   (GInterface)     │
+     └────────────────────┘  └──────┬─────────────┘
+                                    │
+                           implements
+                                    │
+                            ┌───────▼──────────┐
+                            │ CrispyFileCache   │
+                            │ (Final type)       │
+                            │                    │
+                            │ - SHA256 hashing   │
+                            │ - ~/.cache/crispy/ │
+                            │ - mtime validation │
+                            └────────────────────┘
 ```
 
 ## Type Hierarchy
@@ -157,6 +169,32 @@ Defined in `src/core/crispy-file-cache.h/.c`. Implements `CrispyCacheProvider`.
 - Freshness check: cached `.so` mtime >= source file mtime (when source_path is known)
 - Purge: iterates directory, removes all `*.so` files
 
+#### CrispyPluginEngine
+
+Defined in `src/core/crispy-plugin-engine.h/.c`. Final type -- not an interface.
+
+Manages the lifecycle of Crispy plugins. Plugins are `.so` files loaded via GModule that export well-known C symbols. The engine resolves these symbols at load time and dispatches hook calls during script execution.
+
+**Key features:**
+- Load plugins from paths (single or colon/comma-separated list)
+- Resolve mandatory `crispy_plugin_info` and optional hook/lifecycle symbols
+- Dispatch hooks at 9 pipeline phases
+- Shared data store for inter-plugin communication
+- Plugin init/shutdown lifecycle management
+
+**Public API:**
+
+| Method | Description |
+|--------|-------------|
+| `crispy_plugin_engine_new()` | Create empty engine |
+| `crispy_plugin_engine_load()` | Load a single plugin .so |
+| `crispy_plugin_engine_load_paths()` | Load colon/comma-separated plugin list |
+| `crispy_plugin_engine_get_plugin_count()` | Number of loaded plugins |
+| `crispy_plugin_engine_set_data()` | Store data in shared store |
+| `crispy_plugin_engine_get_data()` | Retrieve data from shared store |
+
+See [docs/plugins.md](plugins.md) for plugin authoring guide.
+
 #### CrispyScript
 
 Defined in `src/core/crispy-script.h/.c`. Final type -- not an interface.
@@ -187,34 +225,53 @@ Source (file / -i / stdin)
 [3] Parse & extract #define CRISPY_PARAMS "..."
   │  (remove that line from modified source)
   │
-  ▼
+  ▼                                          ┌─────────────────────┐
+  ├──► HOOK: SOURCE_LOADED          ◄────────┤ Plugins can modify  │
+  │                                          │ source, abort       │
+  ▼                                          └─────────────────────┘
 [4] Shell-expand CRISPY_PARAMS via /bin/sh -c "printf '%s' <params>"
+  │
+  ├──► HOOK: PARAMS_EXPANDED
   │
   ▼
 [5] Compute SHA256(modified_source + expanded_params + compiler_version)
   │
+  ├──► HOOK: HASH_COMPUTED
+  │
   ▼
 [6] Check cache ──[HIT]──► skip to [9]
-  │
- [MISS]
+  │                                          ┌─────────────────────┐
+  ├──► HOOK: CACHE_CHECKED          ◄────────┤ Plugins can force   │
+  │                                          │ recompilation       │
+ [MISS]                                      └─────────────────────┘
   │
   ▼
 [7] Write modified source to /tmp/crispy-XXXXXX.c
-  │
-  ▼
+  │                                          ┌─────────────────────┐
+  ├──► HOOK: PRE_COMPILE            ◄────────┤ Plugins can inject  │
+  │                                          │ compiler flags      │
+  ▼                                          └─────────────────────┘
 [8] Compile:
   │  Normal: compile_shared() → ~/.cache/crispy/<hash>.so
   │  GDB:    compile_executable() → /tmp/crispy-dbg-XXXXXX
+  │
+  ├──► HOOK: POST_COMPILE
   │
   ▼
 [9] g_module_open(cached_so_path, G_MODULE_BIND_LAZY)
   │  (GDB mode: execvp("gdb", "--args", executable, ...) instead)
   │
-  ▼
-[10] g_module_symbol(module, "main") → CrispyMainFunc pointer
+  ├──► HOOK: MODULE_LOADED
   │
   ▼
+[10] g_module_symbol(module, "main") → CrispyMainFunc pointer
+  │                                          ┌─────────────────────┐
+  ├──► HOOK: PRE_EXECUTE            ◄────────┤ Plugins can modify  │
+  │                                          │ argc/argv           │
+  ▼                                          └─────────────────────┘
 [11] main_func(argc, argv)
+  │
+  ├──► HOOK: POST_EXECUTE
   │
   ▼
 [12] Cleanup: g_module_close(), unlink temp (unless -S)
@@ -222,6 +279,8 @@ Source (file / -i / stdin)
   ▼
 Exit with script's return code
 ```
+
+When plugins are loaded via `--plugins`/`-P`, each hook dispatches to all loaded plugins in order. If any plugin returns `CRISPY_HOOK_ABORT`, the pipeline stops immediately. All timing data is accumulated and available to post-execute hooks.
 
 ## Error Handling
 
@@ -236,6 +295,7 @@ All errors use the `CRISPY_ERROR` quark with specific error codes:
 | `CRISPY_ERROR_PARAMS` | CRISPY_PARAMS parsing or shell expansion failed |
 | `CRISPY_ERROR_CACHE` | Cache operation failed |
 | `CRISPY_ERROR_GCC_NOT_FOUND` | gcc binary not found on system |
+| `CRISPY_ERROR_PLUGIN` | Plugin load or hook failure |
 
 ## Flags
 

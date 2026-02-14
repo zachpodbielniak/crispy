@@ -2,9 +2,12 @@
 
 #define CRISPY_COMPILATION
 #include "crispy-script.h"
+#include "crispy-plugin-engine.h"
+#include "crispy-plugin-engine-private.h"
 #include "../interfaces/crispy-compiler.h"
 #include "../interfaces/crispy-cache-provider.h"
 #include "../crispy-types.h"
+#include "../crispy-plugin.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -34,8 +37,9 @@ struct _CrispyScript
 
 typedef struct
 {
-    CrispyCompiler      *compiler;
-    CrispyCacheProvider *cache;
+    CrispyCompiler       *compiler;
+    CrispyCacheProvider  *cache;
+    CrispyPluginEngine   *plugin_engine;  /* NULL if no plugins loaded */
 
     gchar       *source_path;       /* original script path (NULL for inline/stdin) */
     gchar       *source_content;    /* full original source text */
@@ -265,6 +269,7 @@ crispy_script_finalize(
 
     g_clear_object(&priv->compiler);
     g_clear_object(&priv->cache);
+    g_clear_object(&priv->plugin_engine);
 
     g_free(priv->source_path);
     g_free(priv->source_content);
@@ -409,6 +414,77 @@ crispy_script_new_from_stdin(
     return self;
 }
 
+/* --- plugin engine setter --- */
+
+void
+crispy_script_set_plugin_engine(
+    CrispyScript       *self,
+    CrispyPluginEngine *engine
+){
+    CrispyScriptPrivate *priv;
+
+    g_return_if_fail(CRISPY_IS_SCRIPT(self));
+
+    priv = crispy_script_get_instance_private(self);
+
+    g_clear_object(&priv->plugin_engine);
+    if (engine != NULL)
+        priv->plugin_engine = (CrispyPluginEngine *)g_object_ref(engine);
+}
+
+/* --- helper: dispatch hook if engine is set --- */
+static CrispyHookResult
+dispatch_hook(
+    CrispyScriptPrivate *priv,
+    CrispyHookPoint      hook_point,
+    CrispyHookContext   *ctx
+){
+    if (priv->plugin_engine == NULL)
+        return CRISPY_HOOK_CONTINUE;
+
+    return crispy_plugin_engine_dispatch(priv->plugin_engine, hook_point, ctx);
+}
+
+/* --- helper: populate hook context from current private state --- */
+static void
+populate_hook_context(
+    CrispyScriptPrivate *priv,
+    CrispyHookContext   *ctx,
+    const gchar         *cached_so_path,
+    gboolean             cache_hit,
+    gint                 argc,
+    gchar              **argv,
+    GError             **error
+){
+    const gchar *compiler_version;
+
+    compiler_version = crispy_compiler_get_version(priv->compiler);
+
+    ctx->source_path      = priv->source_path;
+    ctx->source_content   = priv->source_content;
+    ctx->source_len       = priv->source_len;
+    ctx->crispy_params    = priv->crispy_params;
+    ctx->expanded_params  = priv->expanded_params;
+    ctx->hash             = priv->hash;
+    ctx->cached_so_path   = cached_so_path;
+    ctx->compiler_version = compiler_version;
+    ctx->temp_source_path = priv->temp_source_path;
+    ctx->flags            = priv->flags;
+    ctx->cache_hit        = cache_hit;
+
+    /* mutable fields */
+    ctx->modified_source  = priv->modified_source;
+    ctx->modified_len     = priv->modified_len;
+    ctx->extra_flags      = NULL;
+    ctx->argc             = argc;
+    ctx->argv             = argv;
+    ctx->force_recompile  = FALSE;
+
+    ctx->exit_code        = priv->exit_code;
+
+    ctx->error            = error;
+}
+
 /* --- execution --- */
 
 gint
@@ -421,20 +497,55 @@ crispy_script_execute(
     CrispyScriptPrivate *priv;
     const gchar *compiler_version;
     g_autofree gchar *cached_so_path = NULL;
+    g_autofree gchar *compile_flags = NULL;
     CrispyMainFunc main_func;
+    CrispyHookContext ctx;
+    CrispyHookResult hook_result;
     gboolean cache_hit;
+    gint64 t_start;
+    gint64 t_phase;
 
     g_return_val_if_fail(CRISPY_IS_SCRIPT(self), -1);
 
     priv = crispy_script_get_instance_private(self);
     priv->exit_code = -1;
 
-    /* shell-expand CRISPY_PARAMS */
+    memset(&ctx, 0, sizeof(ctx));
+    t_start = g_get_monotonic_time();
+
+    /*
+     * [1] SOURCE_LOADED - source has been parsed, shebang/params stripped.
+     * Plugins can inspect or modify the source here.
+     */
+    populate_hook_context(priv, &ctx, NULL, FALSE, argc, argv, error);
+    hook_result = dispatch_hook(priv, CRISPY_HOOK_SOURCE_LOADED, &ctx);
+    if (hook_result == CRISPY_HOOK_ABORT)
+        return -1;
+
+    /* apply source modifications from plugin */
+    if (ctx.modified_source != NULL &&
+        ctx.modified_source != priv->modified_source)
+    {
+        g_free(priv->modified_source);
+        priv->modified_source = g_strdup(ctx.modified_source);
+        priv->modified_len = ctx.modified_len;
+    }
+
+    /* [2] PARAMS_EXPANDED - shell-expand CRISPY_PARAMS */
+    t_phase = g_get_monotonic_time();
     priv->expanded_params = shell_expand(priv->crispy_params, error);
     if (priv->expanded_params == NULL)
         return -1;
+    ctx.time_param_expand = g_get_monotonic_time() - t_phase;
 
-    /* compute cache hash */
+    populate_hook_context(priv, &ctx, NULL, FALSE, argc, argv, error);
+    ctx.time_total = g_get_monotonic_time() - t_start;
+    hook_result = dispatch_hook(priv, CRISPY_HOOK_PARAMS_EXPANDED, &ctx);
+    if (hook_result == CRISPY_HOOK_ABORT)
+        return -1;
+
+    /* [3] HASH_COMPUTED - compute cache hash */
+    t_phase = g_get_monotonic_time();
     compiler_version = crispy_compiler_get_version(priv->compiler);
     priv->hash = crispy_cache_provider_compute_hash(
         priv->cache,
@@ -442,17 +553,34 @@ crispy_script_execute(
         (gssize)priv->source_len,
         priv->expanded_params,
         compiler_version);
+    ctx.time_hash = g_get_monotonic_time() - t_phase;
 
-    /* build cached .so path (get_path returns path with .so extension) */
+    /* build cached .so path */
     cached_so_path = crispy_cache_provider_get_path(priv->cache, priv->hash);
 
-    /* check cache */
+    populate_hook_context(priv, &ctx, cached_so_path, FALSE, argc, argv, error);
+    ctx.time_total = g_get_monotonic_time() - t_start;
+    hook_result = dispatch_hook(priv, CRISPY_HOOK_HASH_COMPUTED, &ctx);
+    if (hook_result == CRISPY_HOOK_ABORT)
+        return -1;
+
+    /* [4] CACHE_CHECKED - check cache */
+    t_phase = g_get_monotonic_time();
     cache_hit = FALSE;
     if (!(priv->flags & CRISPY_FLAG_FORCE_COMPILE))
     {
         cache_hit = crispy_cache_provider_has_valid(
             priv->cache, priv->hash, priv->source_path);
     }
+    ctx.time_cache_check = g_get_monotonic_time() - t_phase;
+
+    populate_hook_context(priv, &ctx, cached_so_path, cache_hit, argc, argv, error);
+    ctx.time_total = g_get_monotonic_time() - t_start;
+    hook_result = dispatch_hook(priv, CRISPY_HOOK_CACHE_CHECKED, &ctx);
+    if (hook_result == CRISPY_HOOK_ABORT)
+        return -1;
+    if (hook_result == CRISPY_HOOK_FORCE_RECOMPILE || ctx.force_recompile)
+        cache_hit = FALSE;
 
     if (!cache_hit)
     {
@@ -514,19 +642,57 @@ crispy_script_execute(
             return -1;
         }
 
+        /* [5] PRE_COMPILE */
+        populate_hook_context(priv, &ctx, cached_so_path, cache_hit,
+                              argc, argv, error);
+        ctx.time_total = g_get_monotonic_time() - t_start;
+        hook_result = dispatch_hook(priv, CRISPY_HOOK_PRE_COMPILE, &ctx);
+        if (hook_result == CRISPY_HOOK_ABORT)
+            return -1;
+
+        /* merge extra_flags from plugin with expanded_params */
+        if (ctx.extra_flags != NULL && ctx.extra_flags[0] != '\0')
+        {
+            if (priv->expanded_params != NULL &&
+                priv->expanded_params[0] != '\0')
+            {
+                compile_flags = g_strdup_printf("%s %s",
+                    priv->expanded_params, ctx.extra_flags);
+            }
+            else
+            {
+                compile_flags = g_strdup(ctx.extra_flags);
+            }
+        }
+        else
+        {
+            compile_flags = g_strdup(priv->expanded_params);
+        }
+
         /* normal compilation: compile to shared object */
+        t_phase = g_get_monotonic_time();
         if (!crispy_compiler_compile_shared(
                 priv->compiler,
                 priv->temp_source_path,
                 cached_so_path,
-                priv->expanded_params,
+                compile_flags,
                 error))
         {
             return -1;
         }
+        ctx.time_compile = g_get_monotonic_time() - t_phase;
+
+        /* [6] POST_COMPILE */
+        populate_hook_context(priv, &ctx, cached_so_path, cache_hit,
+                              argc, argv, error);
+        ctx.time_total = g_get_monotonic_time() - t_start;
+        hook_result = dispatch_hook(priv, CRISPY_HOOK_POST_COMPILE, &ctx);
+        if (hook_result == CRISPY_HOOK_ABORT)
+            return -1;
     }
 
     /* load the compiled shared object */
+    t_phase = g_get_monotonic_time();
     priv->module = g_module_open(cached_so_path, G_MODULE_BIND_LAZY);
     if (priv->module == NULL)
     {
@@ -537,6 +703,15 @@ crispy_script_execute(
                     g_module_error());
         return -1;
     }
+    ctx.time_module_load = g_get_monotonic_time() - t_phase;
+
+    /* [7] MODULE_LOADED */
+    populate_hook_context(priv, &ctx, cached_so_path, cache_hit,
+                          argc, argv, error);
+    ctx.time_total = g_get_monotonic_time() - t_start;
+    hook_result = dispatch_hook(priv, CRISPY_HOOK_MODULE_LOADED, &ctx);
+    if (hook_result == CRISPY_HOOK_ABORT)
+        return -1;
 
     /* look up the main symbol */
     main_func = NULL;
@@ -549,8 +724,31 @@ crispy_script_execute(
         return -1;
     }
 
+    /* [8] PRE_EXECUTE - plugins can modify argc/argv here */
+    populate_hook_context(priv, &ctx, cached_so_path, cache_hit,
+                          argc, argv, error);
+    ctx.time_total = g_get_monotonic_time() - t_start;
+    hook_result = dispatch_hook(priv, CRISPY_HOOK_PRE_EXECUTE, &ctx);
+    if (hook_result == CRISPY_HOOK_ABORT)
+        return -1;
+    /* use potentially modified argc/argv from plugin */
+    argc = ctx.argc;
+    argv = ctx.argv;
+
     /* execute the script */
+    t_phase = g_get_monotonic_time();
     priv->exit_code = main_func(argc, argv);
+    ctx.time_execute = g_get_monotonic_time() - t_phase;
+
+    /* [9] POST_EXECUTE */
+    ctx.time_total = g_get_monotonic_time() - t_start;
+    populate_hook_context(priv, &ctx, cached_so_path, cache_hit,
+                          argc, argv, error);
+    ctx.exit_code = priv->exit_code;
+    ctx.time_total = g_get_monotonic_time() - t_start;
+    hook_result = dispatch_hook(priv, CRISPY_HOOK_POST_EXECUTE, &ctx);
+    if (hook_result == CRISPY_HOOK_ABORT)
+        return -1;
 
     return priv->exit_code;
 }

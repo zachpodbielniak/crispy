@@ -10,6 +10,7 @@
 #include <glib-object.h>
 #include <gmodule.h>
 #include "../crispy-types.h"
+#include "../crispy-plugin.h"
 
 G_BEGIN_DECLS
 
@@ -113,6 +114,20 @@ gint crispy_script_get_exit_code (CrispyScript *self);
  * Returns: (transfer none) (nullable): the temp source path
  */
 const gchar *crispy_script_get_temp_source_path (CrispyScript *self);
+
+/**
+ * crispy_script_set_plugin_engine:
+ * @self: a #CrispyScript
+ * @engine: (transfer none) (nullable): a #CrispyPluginEngine, or %NULL
+ *
+ * Sets the plugin engine for this script. When set, hook functions
+ * from loaded plugins are dispatched at each phase of the execution
+ * pipeline. If @engine is %NULL, no hooks fire (default behavior).
+ *
+ * This must be called before crispy_script_execute().
+ */
+void crispy_script_set_plugin_engine (CrispyScript       *self,
+                                      CrispyPluginEngine *engine);
 
 G_END_DECLS
 
