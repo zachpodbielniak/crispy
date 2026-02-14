@@ -1,0 +1,34 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.so.*
+*.d
+
+# Generated files
+src/crispy-version.h
+*.pc
+*.gir
+*.typelib
+
+# Editor files
+*.swp
+*.swo
+*~
+.*.swp
+tags
+TAGS
+
+# Debug (core dumps in repo root only, not src/core/)
+/core
+vgcore.*
+
+# Coverage
+*.gcov
+*.gcda
+*.gcno
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,49 @@
+/* crispy-version.h - Generated version header for Crispy */
+
+#ifndef CRISPY_VERSION_H
+#define CRISPY_VERSION_H
+
+/**
+ * CRISPY_VERSION_MAJOR:
+ *
+ * The major version component (e.g. 1 if the version is 1.2.3).
+ */
+#define CRISPY_VERSION_MAJOR (@CRISPY_VERSION_MAJOR@)
+
+/**
+ * CRISPY_VERSION_MINOR:
+ *
+ * The minor version component (e.g. 2 if the version is 1.2.3).
+ */
+#define CRISPY_VERSION_MINOR (@CRISPY_VERSION_MINOR@)
+
+/**
+ * CRISPY_VERSION_MICRO:
+ *
+ * The micro version component (e.g. 3 if the version is 1.2.3).
+ */
+#define CRISPY_VERSION_MICRO (@CRISPY_VERSION_MICRO@)
+
+/**
+ * CRISPY_VERSION_STRING:
+ *
+ * The full version string (e.g. "1.2.3").
+ */
+#define CRISPY_VERSION_STRING "@CRISPY_VERSION@"
+
+/**
+ * CRISPY_CHECK_VERSION:
+ * @major: required major version
+ * @minor: required minor version
+ * @micro: required micro version
+ *
+ * Compile-time version check. Evaluates to %TRUE if the crispy version
+ * is greater than or equal to the required version.
+ */
+#define CRISPY_CHECK_VERSION(major, minor, micro) \
+    (CRISPY_VERSION_MAJOR > (major) || \
+     (CRISPY_VERSION_MAJOR == (major) && CRISPY_VERSION_MINOR > (minor)) || \
+     (CRISPY_VERSION_MAJOR == (major) && CRISPY_VERSION_MINOR == (minor) && \
+      CRISPY_VERSION_MICRO >= (micro)))
+
+#endif /* CRISPY_VERSION_H */
