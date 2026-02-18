@@ -40,6 +40,7 @@ static gboolean  opt_gdb          = FALSE;
 static gboolean  opt_dry_run      = FALSE;
 static gboolean  opt_clean_cache  = FALSE;
 static gchar    *opt_plugins      = NULL;
+static gchar    *opt_cache_dir    = NULL;
 static gboolean  opt_version      = FALSE;
 static gboolean  opt_license      = FALSE;
 static GOptionEntry entries[] =
@@ -75,6 +76,10 @@ static GOptionEntry entries[] =
     {
         "plugins", 'P', 0, G_OPTION_ARG_STRING, &opt_plugins,
         "Load plugins (colon-or-comma-separated .so paths)", "PATHS"
+    },
+    {
+        "cache-dir", 0, 0, G_OPTION_ARG_STRING, &opt_cache_dir,
+        "Override cache directory (default: ~/.cache/crispy)", "PATH"
     },
     {
         "clean-cache", 0, 0, G_OPTION_ARG_NONE, &opt_clean_cache,
@@ -174,7 +179,8 @@ split_argv(
             strcmp(argv[i], "-p") == 0 ||
             strcmp(argv[i], "--preload") == 0 ||
             strcmp(argv[i], "-P") == 0 ||
-            strcmp(argv[i], "--plugins") == 0)
+            strcmp(argv[i], "--plugins") == 0 ||
+            strcmp(argv[i], "--cache-dir") == 0)
         {
             i++; /* skip the value argument */
         }
@@ -282,7 +288,7 @@ main(
         return 1;
     }
 
-    cache = crispy_file_cache_new();
+    cache = crispy_file_cache_new_with_dir(opt_cache_dir);
 
     /* load plugins if requested */
     if (opt_plugins != NULL)
@@ -422,6 +428,7 @@ cleanup:
     g_free(opt_include);
     g_free(opt_preload);
     g_free(opt_plugins);
+    g_free(opt_cache_dir);
 
     return exit_code;
 }
