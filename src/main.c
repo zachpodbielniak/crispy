@@ -4,11 +4,13 @@
 #include "crispy.h"
 #include "core/crispy-config-loader.h"
 #include "crispy-default-config.h"
+#include "crispy-logo.h"
 
 #include <glib.h>
 #include <glib-unix.h>
 #include <gmodule.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 
 #define CRISPY_LICENSE_TEXT \
@@ -48,6 +50,7 @@ static gboolean  opt_no_config    = FALSE;
 static gboolean  opt_gen_config   = FALSE;
 static gboolean  opt_version      = FALSE;
 static gboolean  opt_license      = FALSE;
+static gboolean  opt_logo         = FALSE;
 static GOptionEntry entries[] =
 {
     {
@@ -110,8 +113,49 @@ static GOptionEntry entries[] =
         "license", 0, 0, G_OPTION_ARG_NONE, &opt_license,
         "Show license (AGPLv3)", NULL
     },
+    {
+        "logo", 0, 0, G_OPTION_ARG_NONE, &opt_logo,
+        "Show ASCII art logo", NULL
+    },
     { NULL }
 };
+
+/**
+ * strip_ansi:
+ * @text: input string possibly containing ANSI escape sequences
+ *
+ * Removes ANSI escape sequences (ESC [ ... m) from the input string.
+ * Used to produce a plain-text version of the logo for piped output.
+ *
+ * Returns: (transfer full): a newly allocated string with escapes removed
+ */
+static gchar *
+strip_ansi(
+    const gchar *text
+){
+    GString *out;
+    const gchar *p;
+
+    out = g_string_new(NULL);
+
+    for (p = text; *p != '\0'; p++)
+    {
+        /* ESC byte starts an escape sequence */
+        if (*p == '\033' && *(p + 1) == '[')
+        {
+            p += 2; /* skip ESC [ */
+            /* skip until we hit the terminating letter (m, K, J, etc.) */
+            while (*p != '\0' && !g_ascii_isalpha(*p))
+                p++;
+            /* p now points at the terminator letter; the for-loop
+             * will advance past it */
+            continue;
+        }
+        g_string_append_c(out, *p);
+    }
+
+    return g_string_free(out, FALSE);
+}
 
 /* --- signal handler for cleanup --- */
 static gboolean
@@ -265,21 +309,41 @@ main(
 
     /* set up option context */
     context = g_option_context_new("[SCRIPT] [ARGS...] - GLib-native C scripting");
-    g_option_context_set_summary(context,
-        "Crispy Really Is Super Powerful Yo\n"
-        "Compile and run C scripts with GLib/GObject/GIO support.\n"
-        "\n"
-        "Arguments after the script path are passed to the script, not crispy.\n"
-        "\n"
-        "Examples:\n"
-        "  crispy script.c\n"
-        "  crispy script.c arg1 arg2\n"
-        "  crispy script.c -f blah        (script sees -f blah)\n"
-        "  crispy -n script.c             (crispy gets -n, script sees no args)\n"
-        "  crispy -i 'g_print(\"hello\\n\"); return 0;'\n"
-        "  echo 'g_print(\"hello\\n\"); return 0;' | crispy -\n"
-        "  crispy --gdb script.c\n"
-        "  chmod +x script.c && ./script.c  (with #!/usr/bin/crispy shebang)");
+
+    /* prepend ASCII logo to help summary; strip ANSI when piped */
+    {
+        g_autofree gchar *summary = NULL;
+        g_autofree gchar *plain_logo = NULL;
+        const gchar *logo;
+
+        if (isatty(STDOUT_FILENO))
+            logo = crispy_logo_text;
+        else
+        {
+            plain_logo = strip_ansi(crispy_logo_text);
+            logo = plain_logo;
+        }
+
+        summary = g_strdup_printf(
+            "%s\n"
+            "Crispy Really Is Super Powerful Yo\n"
+            "Compile and run C scripts with GLib/GObject/GIO support.\n"
+            "\n"
+            "Arguments after the script path are passed to the script, not crispy.\n"
+            "\n"
+            "Examples:\n"
+            "  crispy script.c\n"
+            "  crispy script.c arg1 arg2\n"
+            "  crispy script.c -f blah        (script sees -f blah)\n"
+            "  crispy -n script.c             (crispy gets -n, script sees no args)\n"
+            "  crispy -i 'g_print(\"hello\\n\"); return 0;'\n"
+            "  echo 'g_print(\"hello\\n\"); return 0;' | crispy -\n"
+            "  crispy --gdb script.c\n"
+            "  chmod +x script.c && ./script.c  (with #!/usr/bin/crispy shebang)",
+            logo);
+
+        g_option_context_set_summary(context, summary);
+    }
     g_option_context_set_description(context,
         "Config file search order (first found wins):\n"
         "  1. $CRISPY_CONFIG_FILE environment variable\n"
@@ -323,6 +387,13 @@ main(
     if (opt_license)
     {
         g_print("%s", CRISPY_LICENSE_TEXT);
+        g_strfreev(crispy_argv);
+        return 0;
+    }
+
+    if (opt_logo)
+    {
+        g_print("%s", crispy_logo_text);
         g_strfreev(crispy_argv);
         return 0;
     }

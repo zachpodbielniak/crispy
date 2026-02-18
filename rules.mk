@@ -4,8 +4,9 @@
 # All source objects depend on the generated version header
 $(LIB_OBJS) $(MAIN_OBJ): src/crispy-version.h
 
-# main.o depends on the generated default config header
+# main.o depends on generated headers
 $(MAIN_OBJ): $(OUTDIR)/crispy-default-config.h
+$(MAIN_OBJ): $(OUTDIR)/crispy-logo.h
 
 # Object file compilation
 $(OBJDIR)/%.o: src/%.c | $(OBJDIR)
@@ -99,6 +100,14 @@ $(OUTDIR)/crispy-default-config.h: data/default-config.c | $(OUTDIR)
 	@sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g; s/^/"/; s/$$/\\n"/' $< >> $@
 	@echo ";" >> $@
 
+# Logo ASCII art header generation (embeds data/logo.txt as a C string)
+$(OUTDIR)/crispy-logo.h: data/logo.txt | $(OUTDIR)
+	@$(MKDIR_P) $(dir $@)
+	@echo "  GEN     $@"
+	@echo "static const gchar *crispy_logo_text =" > $@
+	@sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g; s/^/"/; s/$$/\\n"/' $< >> $@
+	@echo ";" >> $@
+
 # Header dependency generation
 $(OBJDIR)/%.d: src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
@@ -114,6 +123,7 @@ clean-all:
 	rm -rf $(BUILDDIR)
 	rm -f src/crispy-version.h
 	rm -f $(OUTDIR)/crispy-default-config.h
+	rm -f $(OUTDIR)/crispy-logo.h
 
 # Installation rules
 .PHONY: install install-lib install-bin install-headers install-pc install-gir install-data
