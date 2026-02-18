@@ -139,8 +139,11 @@ shell_expand(
     std_out = NULL;
     std_err = NULL;
 
-    /* use printf '%s' to avoid echo's interpretation of backslashes */
-    cmd = g_strdup_printf("/bin/sh -c \"printf '%%s' %s\"", params);
+    /* use printf '%s ' to avoid echo's interpretation of backslashes;
+     * the trailing space after %s ensures word-split arguments from
+     * command substitutions like $(pkg-config ...) are rejoined with
+     * spaces -- g_strstrip below removes the final trailing space */
+    cmd = g_strdup_printf("/bin/sh -c \"printf '%%s ' %s\"", params);
 
     if (!g_spawn_command_line_sync(cmd, &std_out, &std_err,
                                    &exit_status, error))
