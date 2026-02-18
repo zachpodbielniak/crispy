@@ -20,6 +20,9 @@ typedef struct _CrispyFileCache        CrispyFileCache;
 typedef struct _CrispyScript           CrispyScript;
 typedef struct _CrispyPluginEngine     CrispyPluginEngine;
 
+/* Config context forward declaration (plain struct, not GObject) */
+typedef struct _CrispyConfigContext    CrispyConfigContext;
+
 /**
  * CrispyFlags:
  * @CRISPY_FLAG_NONE: No special flags.
@@ -95,7 +98,8 @@ typedef enum
     CRISPY_ERROR_PARAMS,
     CRISPY_ERROR_CACHE,
     CRISPY_ERROR_GCC_NOT_FOUND,
-    CRISPY_ERROR_PLUGIN
+    CRISPY_ERROR_PLUGIN,
+    CRISPY_ERROR_CONFIG
 } CrispyError;
 
 G_END_DECLS

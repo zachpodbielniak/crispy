@@ -129,6 +129,35 @@ const gchar *crispy_script_get_temp_source_path (CrispyScript *self);
 void crispy_script_set_plugin_engine (CrispyScript       *self,
                                       CrispyPluginEngine *engine);
 
+/**
+ * crispy_script_set_extra_flags:
+ * @self: a #CrispyScript
+ * @extra_flags: (nullable): additional compiler flags from config
+ *
+ * Sets extra compiler flags that are **prepended** before the script's
+ * own CRISPY_PARAMS during compilation. These act as defaults that
+ * the script can override via its own CRISPY_PARAMS.
+ *
+ * This must be called before crispy_script_execute().
+ */
+void crispy_script_set_extra_flags (CrispyScript *self,
+                                    const gchar  *extra_flags);
+
+/**
+ * crispy_script_set_override_flags:
+ * @self: a #CrispyScript
+ * @override_flags: (nullable): override compiler flags from config
+ *
+ * Sets override compiler flags that are **appended** after the script's
+ * CRISPY_PARAMS and plugin extra_flags during compilation. These have
+ * the highest priority and override everything else. For gcc, later
+ * flags win when there are conflicts.
+ *
+ * This must be called before crispy_script_execute().
+ */
+void crispy_script_set_override_flags (CrispyScript *self,
+                                       const gchar  *override_flags);
+
 G_END_DECLS
 
 #endif /* CRISPY_SCRIPT_H */

@@ -30,6 +30,7 @@
 #include "core/crispy-file-cache.h"
 #include "core/crispy-plugin-engine.h"
 #include "core/crispy-script.h"
+#include "core/crispy-config-context.h"
 
 #undef CRISPY_INSIDE
 

@@ -49,7 +49,8 @@ typedef enum
     CRISPY_ERROR_PARAMS,
     CRISPY_ERROR_CACHE,
     CRISPY_ERROR_GCC_NOT_FOUND,
-    CRISPY_ERROR_PLUGIN
+    CRISPY_ERROR_PLUGIN,
+    CRISPY_ERROR_CONFIG
 } CrispyError;
 ```
 
@@ -65,6 +66,7 @@ Error codes for the `CRISPY_ERROR` domain.
 | `CRISPY_ERROR_CACHE` | Cache operation failed |
 | `CRISPY_ERROR_GCC_NOT_FOUND` | gcc binary not found |
 | `CRISPY_ERROR_PLUGIN` | Plugin load or hook failure |
+| `CRISPY_ERROR_CONFIG` | Config file compilation or init failure |
 
 ### CrispyHookPoint
 
@@ -160,6 +162,14 @@ typedef CrispyHookResult (*CrispyPluginHookFunc)(CrispyHookContext *ctx);
 ```
 
 Function signature for all hook callbacks. Plugins export functions named `crispy_plugin_on_<hook_name>` matching this signature.
+
+### CrispyConfigInitFunc
+
+```c
+typedef gboolean (*CrispyConfigInitFunc)(CrispyConfigContext *ctx);
+```
+
+Function signature for the config file's entry point. The compiled config `.so` must export this as `crispy_config_init`.
 
 ### CrispyPluginInitFunc
 
@@ -692,6 +702,191 @@ Sets the plugin engine for this script. When set, hook functions from loaded plu
 **Parameters:**
 - `self` -- a CrispyScript
 - `engine` -- (transfer none) (nullable) a CrispyPluginEngine, or NULL
+
+### crispy_script_set_extra_flags
+
+```c
+void
+crispy_script_set_extra_flags(CrispyScript *self,
+                               const gchar  *extra_flags);
+```
+
+Sets extra compiler flags that are **prepended** before the script's own CRISPY_PARAMS during compilation. These act as defaults that the script can override. Must be called before `crispy_script_execute()`.
+
+**Parameters:**
+- `self` -- a CrispyScript
+- `extra_flags` -- (nullable) additional compiler flags from config
+
+### crispy_script_set_override_flags
+
+```c
+void
+crispy_script_set_override_flags(CrispyScript *self,
+                                  const gchar  *override_flags);
+```
+
+Sets override compiler flags that are **appended** after the script's CRISPY_PARAMS and plugin extra_flags during compilation. These have the highest priority and override everything else. Must be called before `crispy_script_execute()`.
+
+**Parameters:**
+- `self` -- a CrispyScript
+- `override_flags` -- (nullable) override compiler flags from config
+
+---
+
+## CrispyConfigContext (Plain Struct)
+
+An opaque context structure passed to `crispy_config_init()` in config files. Config authors use the setter/getter functions to inspect and modify crispy's behavior before script execution.
+
+This is NOT a GObject -- it is a short-lived struct allocated on the stack in `main()`.
+
+See [docs/config.md](config.md) for the full configuration guide.
+
+### crispy_config_context_get_crispy_argc
+
+```c
+gint
+crispy_config_context_get_crispy_argc(CrispyConfigContext *ctx);
+```
+
+Returns crispy's own argument count (the full original command line).
+
+### crispy_config_context_get_crispy_argv
+
+```c
+const gchar * const *
+crispy_config_context_get_crispy_argv(CrispyConfigContext *ctx);
+```
+
+Returns crispy's own argument vector (read-only).
+
+### crispy_config_context_get_script_argc
+
+```c
+gint
+crispy_config_context_get_script_argc(CrispyConfigContext *ctx);
+```
+
+Returns the script's argument count.
+
+### crispy_config_context_get_script_argv
+
+```c
+gchar **
+crispy_config_context_get_script_argv(CrispyConfigContext *ctx);
+```
+
+Returns the script's argument vector.
+
+### crispy_config_context_get_script_path
+
+```c
+const gchar *
+crispy_config_context_get_script_path(CrispyConfigContext *ctx);
+```
+
+Returns the path of the script about to run. Returns NULL for inline (`-i`) or stdin (`-`) modes.
+
+### crispy_config_context_set_extra_flags
+
+```c
+void
+crispy_config_context_set_extra_flags(CrispyConfigContext *ctx,
+                                       const gchar         *flags);
+```
+
+Sets default compiler flags **prepended** before CRISPY_PARAMS (lowest priority). Replaces any previously set extra_flags.
+
+### crispy_config_context_append_extra_flags
+
+```c
+void
+crispy_config_context_append_extra_flags(CrispyConfigContext *ctx,
+                                          const gchar         *flags);
+```
+
+Appends to the existing extra_flags string (space-separated).
+
+### crispy_config_context_set_override_flags
+
+```c
+void
+crispy_config_context_set_override_flags(CrispyConfigContext *ctx,
+                                          const gchar         *flags);
+```
+
+Sets override compiler flags **appended** after everything (highest priority). Replaces any previously set override_flags.
+
+### crispy_config_context_append_override_flags
+
+```c
+void
+crispy_config_context_append_override_flags(CrispyConfigContext *ctx,
+                                             const gchar         *flags);
+```
+
+Appends to the existing override_flags string (space-separated).
+
+### crispy_config_context_add_plugin
+
+```c
+void
+crispy_config_context_add_plugin(CrispyConfigContext *ctx,
+                                  const gchar         *plugin_path);
+```
+
+Queues a plugin `.so` for loading. Config plugins load before CLI plugins (`-P`). Multiple calls accumulate paths in order.
+
+### crispy_config_context_set_plugin_data
+
+```c
+void
+crispy_config_context_set_plugin_data(CrispyConfigContext *ctx,
+                                       const gchar         *key,
+                                       const gchar         *value);
+```
+
+Sets a key-value pair injected into the plugin engine's shared data store after config loading.
+
+### crispy_config_context_set_flags
+
+```c
+void
+crispy_config_context_set_flags(CrispyConfigContext *ctx,
+                                 guint                flags);
+```
+
+Sets the default CrispyFlags bitmask. CLI flags are OR'd on top (CLI always wins).
+
+### crispy_config_context_add_flags
+
+```c
+void
+crispy_config_context_add_flags(CrispyConfigContext *ctx,
+                                 guint                flags);
+```
+
+Adds flags to the existing bitmask (OR operation).
+
+### crispy_config_context_set_cache_dir
+
+```c
+void
+crispy_config_context_set_cache_dir(CrispyConfigContext *ctx,
+                                     const gchar         *cache_dir);
+```
+
+Overrides the cache directory. CLI `--cache-dir` takes precedence if also set.
+
+### crispy_config_context_set_script_argv
+
+```c
+void
+crispy_config_context_set_script_argv(CrispyConfigContext *ctx,
+                                       gint                 argc,
+                                       gchar              **argv);
+```
+
+Replaces the script's argv entirely. The context takes ownership of `argv` (freed with `g_strfreev()` on cleanup).
 
 ---
 

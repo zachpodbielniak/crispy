@@ -2,6 +2,7 @@
 
 #define CRISPY_COMPILATION
 #include "crispy-script.h"
+#include "crispy-source-utils-private.h"
 #include "crispy-plugin-engine.h"
 #include "crispy-plugin-engine-private.h"
 #include "../interfaces/crispy-compiler.h"
@@ -56,113 +57,45 @@ typedef struct
     GModule     *module;            /* loaded shared object */
     CrispyFlags  flags;
 
+    /* config-injected compiler flags */
+    gchar       *config_extra_flags;    /* prepended before CRISPY_PARAMS */
+    gchar       *config_override_flags; /* appended after everything */
+
     gint         exit_code;
 } CrispyScriptPrivate;
 
 G_DEFINE_FINAL_TYPE_WITH_PRIVATE(CrispyScript, crispy_script, G_TYPE_OBJECT)
 
-/* --- helper: parse #define CRISPY_PARAMS "..." from source --- */
+/*
+ * parse_crispy_params:
+ * @priv: script private data with source_content populated
+ *
+ * Extracts CRISPY_PARAMS from the source and produces a modified
+ * copy with the shebang and CRISPY_PARAMS define removed.
+ * Delegates to the shared source utility functions.
+ */
 static void
 parse_crispy_params(
     CrispyScriptPrivate *priv
 ){
-    GString *modified;
-    gchar **lines;
-    gint i;
-    gboolean found;
-
-    found = FALSE;
-    lines = g_strsplit(priv->source_content, "\n", -1);
-    modified = g_string_new(NULL);
-
-    for (i = 0; lines[i] != NULL; i++)
-    {
-        const gchar *line;
-        const gchar *p;
-        const gchar *start;
-        const gchar *end;
-
-        line = lines[i];
-
-        /* skip shebang on the first line */
-        if (i == 0 && g_str_has_prefix(line, "#!"))
-            continue;
-
-        /* look for #define CRISPY_PARAMS */
-        p = line;
-        while (*p == ' ' || *p == '\t')
-            p++;
-
-        if (!found && g_str_has_prefix(p, "#define") &&
-            strstr(p, "CRISPY_PARAMS") != NULL)
-        {
-            /* extract the quoted value */
-            start = strchr(p, '"');
-            if (start != NULL)
-            {
-                start++; /* skip opening quote */
-                end = strrchr(start, '"');
-                if (end != NULL && end > start)
-                {
-                    priv->crispy_params = g_strndup(start, (gsize)(end - start));
-                    found = TRUE;
-                    continue; /* skip this line in modified source */
-                }
-            }
-        }
-
-        /* keep the line in modified source */
-        g_string_append(modified, line);
-        g_string_append_c(modified, '\n');
-    }
-
-    g_strfreev(lines);
-
-    priv->modified_source = g_string_free(modified, FALSE);
-    priv->modified_len = strlen(priv->modified_source);
+    priv->crispy_params = crispy_source_extract_params(priv->source_content);
+    priv->modified_source = crispy_source_strip_header(
+        priv->source_content, &priv->modified_len);
 }
 
-/* --- helper: shell-expand CRISPY_PARAMS --- */
+/*
+ * shell_expand:
+ * @params: raw CRISPY_PARAMS value
+ * @error: return location for a #GError, or %NULL
+ *
+ * Thin wrapper around crispy_source_shell_expand() for local use.
+ */
 static gchar *
 shell_expand(
     const gchar  *params,
     GError      **error
 ){
-    g_autofree gchar *cmd = NULL;
-    gchar *std_out;
-    gchar *std_err;
-    gint exit_status;
-
-    if (params == NULL || params[0] == '\0')
-        return g_strdup("");
-
-    std_out = NULL;
-    std_err = NULL;
-
-    /* use printf '%s ' to avoid echo's interpretation of backslashes;
-     * the trailing space after %s ensures word-split arguments from
-     * command substitutions like $(pkg-config ...) are rejoined with
-     * spaces -- g_strstrip below removes the final trailing space */
-    cmd = g_strdup_printf("/bin/sh -c \"printf '%%s ' %s\"", params);
-
-    if (!g_spawn_command_line_sync(cmd, &std_out, &std_err,
-                                   &exit_status, error))
-    {
-        g_free(std_out);
-        g_free(std_err);
-        return NULL;
-    }
-
-    g_free(std_err);
-
-    if (!g_spawn_check_wait_status(exit_status, error))
-    {
-        g_free(std_out);
-        return NULL;
-    }
-
-    g_strstrip(std_out);
-    return std_out;
+    return crispy_source_shell_expand(params, error);
 }
 
 /* --- helper: write modified source to temp file --- */
@@ -281,6 +214,8 @@ crispy_script_finalize(
     g_free(priv->modified_source);
     g_free(priv->temp_source_path);
     g_free(priv->hash);
+    g_free(priv->config_extra_flags);
+    g_free(priv->config_override_flags);
 
     G_OBJECT_CLASS(crispy_script_parent_class)->finalize(object);
 }
@@ -435,6 +370,38 @@ crispy_script_set_plugin_engine(
         priv->plugin_engine = (CrispyPluginEngine *)g_object_ref(engine);
 }
 
+/* --- config flag setters --- */
+
+void
+crispy_script_set_extra_flags(
+    CrispyScript *self,
+    const gchar  *extra_flags
+){
+    CrispyScriptPrivate *priv;
+
+    g_return_if_fail(CRISPY_IS_SCRIPT(self));
+
+    priv = crispy_script_get_instance_private(self);
+
+    g_free(priv->config_extra_flags);
+    priv->config_extra_flags = g_strdup(extra_flags);
+}
+
+void
+crispy_script_set_override_flags(
+    CrispyScript *self,
+    const gchar  *override_flags
+){
+    CrispyScriptPrivate *priv;
+
+    g_return_if_fail(CRISPY_IS_SCRIPT(self));
+
+    priv = crispy_script_get_instance_private(self);
+
+    g_free(priv->config_override_flags);
+    priv->config_override_flags = g_strdup(override_flags);
+}
+
 /* --- helper: dispatch hook if engine is set --- */
 static CrispyHookResult
 dispatch_hook(
@@ -547,15 +514,46 @@ crispy_script_execute(
     if (hook_result == CRISPY_HOOK_ABORT)
         return -1;
 
-    /* [3] HASH_COMPUTED - compute cache hash */
+    /* [3] HASH_COMPUTED - compute cache hash
+     *
+     * The hash must include ALL flags that affect compilation:
+     * config extra_flags, expanded CRISPY_PARAMS, and config
+     * override_flags.  Otherwise different config flag sets
+     * produce the same hash and stale cache entries get reused.
+     */
     t_phase = g_get_monotonic_time();
     compiler_version = crispy_compiler_get_version(priv->compiler);
-    priv->hash = crispy_cache_provider_compute_hash(
-        priv->cache,
-        priv->source_content,
-        (gssize)priv->source_len,
-        priv->expanded_params,
-        compiler_version);
+
+    {
+        g_autoptr(GString) hash_flags = g_string_new(NULL);
+
+        if (priv->config_extra_flags != NULL &&
+            priv->config_extra_flags[0] != '\0')
+        {
+            g_string_append(hash_flags, priv->config_extra_flags);
+            g_string_append_c(hash_flags, ' ');
+        }
+
+        if (priv->expanded_params != NULL &&
+            priv->expanded_params[0] != '\0')
+        {
+            g_string_append(hash_flags, priv->expanded_params);
+            g_string_append_c(hash_flags, ' ');
+        }
+
+        if (priv->config_override_flags != NULL &&
+            priv->config_override_flags[0] != '\0')
+        {
+            g_string_append(hash_flags, priv->config_override_flags);
+        }
+
+        priv->hash = crispy_cache_provider_compute_hash(
+            priv->cache,
+            priv->source_content,
+            (gssize)priv->source_len,
+            hash_flags->str,
+            compiler_version);
+    }
     ctx.time_hash = g_get_monotonic_time() - t_phase;
 
     /* build cached .so path */
@@ -653,23 +651,53 @@ crispy_script_execute(
         if (hook_result == CRISPY_HOOK_ABORT)
             return -1;
 
-        /* merge extra_flags from plugin with expanded_params */
-        if (ctx.extra_flags != NULL && ctx.extra_flags[0] != '\0')
+        /*
+         * Build compile_flags with three-tier precedence.
+         * gcc uses last-wins for conflicting flags, so order matters:
+         *   1. config extra_flags    (defaults, lowest priority)
+         *   2. CRISPY_PARAMS         (script-level overrides)
+         *   3. plugin extra_flags    (from PRE_COMPILE hook)
+         *   4. config override_flags (forced, highest priority)
+         */
         {
+            GString *flags_buf;
+
+            flags_buf = g_string_new(NULL);
+
+            /* tier 1: config extra_flags (defaults) */
+            if (priv->config_extra_flags != NULL &&
+                priv->config_extra_flags[0] != '\0')
+            {
+                g_string_append(flags_buf, priv->config_extra_flags);
+            }
+
+            /* tier 2: script's own CRISPY_PARAMS */
             if (priv->expanded_params != NULL &&
                 priv->expanded_params[0] != '\0')
             {
-                compile_flags = g_strdup_printf("%s %s",
-                    priv->expanded_params, ctx.extra_flags);
+                if (flags_buf->len > 0)
+                    g_string_append_c(flags_buf, ' ');
+                g_string_append(flags_buf, priv->expanded_params);
             }
-            else
+
+            /* tier 3: plugin-injected extra_flags */
+            if (ctx.extra_flags != NULL && ctx.extra_flags[0] != '\0')
             {
-                compile_flags = g_strdup(ctx.extra_flags);
+                if (flags_buf->len > 0)
+                    g_string_append_c(flags_buf, ' ');
+                g_string_append(flags_buf, ctx.extra_flags);
             }
-        }
-        else
-        {
-            compile_flags = g_strdup(priv->expanded_params);
+
+            /* tier 4: config override_flags (highest priority) */
+            if (priv->config_override_flags != NULL &&
+                priv->config_override_flags[0] != '\0')
+            {
+                if (flags_buf->len > 0)
+                    g_string_append_c(flags_buf, ' ');
+                g_string_append(flags_buf, priv->config_override_flags);
+            }
+
+            compile_flags = g_string_free(flags_buf, FALSE);
         }
 
         /* normal compilation: compile to shared object */

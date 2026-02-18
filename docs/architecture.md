@@ -282,6 +282,54 @@ Exit with script's return code
 
 When plugins are loaded via `--plugins`/`-P`, each hook dispatches to all loaded plugins in order. If any plugin returns `CRISPY_HOOK_ABORT`, the pipeline stops immediately. All timing data is accumulated and available to post-execute hooks.
 
+## Configuration System
+
+Crispy supports a C-based configuration file that is compiled and loaded using crispy's own compilation and caching infrastructure. The config system operates independently of `CrispyScript` -- it does not trigger plugin hooks during its own compilation.
+
+### Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| `CrispyConfigContext` | `src/core/crispy-config-context.h/.c` | Plain struct (not GObject) with setter/getter API |
+| Config Loader | `src/core/crispy-config-loader.h/.c` | Internal: finds, compiles, loads, and calls config |
+| Source Utilities | `src/core/crispy-source-utils-private.h/.c` | Shared: CRISPY_PARAMS extraction, shell expansion |
+
+### Design Decisions
+
+- **Plain struct, not GObject** -- `CrispyConfigContext` is short-lived (stack-allocated in main.c), needs no signals/properties, follows the `CrispyHookContext` pattern.
+- **Direct interface usage** -- The config loader uses `CrispyCompiler` and `CrispyCacheProvider` interfaces directly, not `CrispyScript`, since config files have a `crispy_config_init()` entry point (not `main()`) and should not trigger plugin hooks.
+- **Config loads before plugins** -- The config can specify which plugins to load, so it must run first.
+- **CLI overrides config** -- If both config and CLI set flags, they are OR'd together (CLI always wins).
+- **Config .so stays loaded** -- The compiled module is kept open so config symbols remain available.
+- **Opaque struct** -- The struct definition is only visible to internal code (`CRISPY_COMPILATION`); config authors use the setter/getter API.
+
+### Compiler Flag Hierarchy
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│               Final gcc command line (left to right)        │
+├──────────┬──────────────┬──────────────┬───────────────────┤
+│ extra_   │ CRISPY_      │ plugin       │ override_         │
+│ flags    │ PARAMS       │ extra_flags  │ flags             │
+│          │              │              │                   │
+│ (config  │ (per-script) │ (PRE_COMPILE │ (config forced    │
+│ defaults)│              │  hook)       │  overrides)       │
+│ LOWEST   │              │              │ HIGHEST           │
+│ priority │              │              │ priority          │
+└──────────┴──────────────┴──────────────┴───────────────────┘
+                    gcc last-wins semantics
+```
+
+### Config Search Path
+
+1. `$CRISPY_CONFIG_FILE` environment variable
+2. `-c`/`--config PATH` CLI argument
+3. `~/.config/crispy/config.c`
+4. `/etc/crispy/config.c` (`CRISPY_SYSCONFDIR`)
+5. `/usr/share/crispy/config.c` (`CRISPY_DATADIR`)
+
+See [docs/config.md](config.md) for the full user-facing configuration guide.
+
 ## Error Handling
 
 All errors use the `CRISPY_ERROR` quark with specific error codes:
@@ -296,6 +344,7 @@ All errors use the `CRISPY_ERROR` quark with specific error codes:
 | `CRISPY_ERROR_CACHE` | Cache operation failed |
 | `CRISPY_ERROR_GCC_NOT_FOUND` | gcc binary not found on system |
 | `CRISPY_ERROR_PLUGIN` | Plugin load or hook failure |
+| `CRISPY_ERROR_CONFIG` | Config file compilation or init failure |
 
 ## Flags
 

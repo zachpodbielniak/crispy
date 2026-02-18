@@ -21,6 +21,7 @@ BINDIR ?= $(PREFIX)/bin
 LIBDIR ?= $(PREFIX)/$(LIBSUFFIX)
 INCLUDEDIR ?= $(PREFIX)/include
 DATADIR ?= $(PREFIX)/share
+SYSCONFDIR ?= /etc
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
 GIRDIR ?= $(DATADIR)/gir-1.0
 TYPELIBDIR ?= $(LIBDIR)/girepository-1.0
@@ -91,7 +92,12 @@ CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(DEPS_REQUIRED) 2>/dev/null)
 LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(DEPS_REQUIRED) 2>/dev/null)
 
 # Include paths
-CFLAGS_INC := -I. -Isrc
+CFLAGS_INC := -I. -Isrc -I$(OUTDIR)
+
+# Config system defines
+CFLAGS_BASE += -DCRISPY_SYSCONFDIR=\"$(SYSCONFDIR)\"
+CFLAGS_BASE += -DCRISPY_DATADIR=\"$(DATADIR)\"
+CFLAGS_BASE += -DCRISPY_DEV_INCLUDE_DIR=\"$(CURDIR)/src\"
 
 # Combine all CFLAGS
 CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS)

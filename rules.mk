@@ -4,6 +4,9 @@
 # All source objects depend on the generated version header
 $(LIB_OBJS) $(MAIN_OBJ): src/crispy-version.h
 
+# main.o depends on the generated default config header
+$(MAIN_OBJ): $(OUTDIR)/crispy-default-config.h
+
 # Object file compilation
 $(OBJDIR)/%.o: src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
@@ -88,6 +91,14 @@ src/crispy-version.h: src/crispy-version.h.in
 		-e 's|@CRISPY_VERSION@|$(VERSION)|g' \
 		$< > $@
 
+# Default config header generation (embeds data/default-config.c as a C string)
+$(OUTDIR)/crispy-default-config.h: data/default-config.c | $(OUTDIR)
+	@$(MKDIR_P) $(dir $@)
+	@echo "  GEN     $@"
+	@echo "static const gchar *default_c_config =" > $@
+	@sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g; s/^/"/; s/$$/\\n"/' $< >> $@
+	@echo ";" >> $@
+
 # Header dependency generation
 $(OBJDIR)/%.d: src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
@@ -102,11 +113,12 @@ clean:
 clean-all:
 	rm -rf $(BUILDDIR)
 	rm -f src/crispy-version.h
+	rm -f $(OUTDIR)/crispy-default-config.h
 
 # Installation rules
-.PHONY: install install-lib install-bin install-headers install-pc install-gir
+.PHONY: install install-lib install-bin install-headers install-pc install-gir install-data
 
-install: install-lib install-bin install-headers install-pc
+install: install-lib install-bin install-headers install-pc install-data
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -129,10 +141,18 @@ install-headers:
 	$(INSTALL_DATA) src/crispy.h $(DESTDIR)$(INCLUDEDIR)/crispy/
 	$(INSTALL_DATA) src/crispy-types.h $(DESTDIR)$(INCLUDEDIR)/crispy/
 	$(INSTALL_DATA) src/crispy-version.h $(DESTDIR)$(INCLUDEDIR)/crispy/
+	$(INSTALL_DATA) src/crispy-plugin.h $(DESTDIR)$(INCLUDEDIR)/crispy/
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/crispy/interfaces
 	$(INSTALL_DATA) src/interfaces/*.h $(DESTDIR)$(INCLUDEDIR)/crispy/interfaces/
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/crispy/core
-	$(INSTALL_DATA) src/core/*.h $(DESTDIR)$(INCLUDEDIR)/crispy/core/
+	for hdr in src/core/*.h; do \
+		case $$hdr in *-private.h) continue ;; esac; \
+		$(INSTALL_DATA) $$hdr $(DESTDIR)$(INCLUDEDIR)/crispy/core/; \
+	done
+
+install-data: data/default-config.c
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/crispy
+	$(INSTALL_DATA) data/default-config.c $(DESTDIR)$(DATADIR)/crispy/config.c
 
 install-pc: $(OUTDIR)/crispy.pc
 	$(MKDIR_P) $(DESTDIR)$(PKGCONFIGDIR)
@@ -156,3 +176,5 @@ uninstall:
 	rm -f $(DESTDIR)$(PKGCONFIGDIR)/crispy.pc
 	rm -f $(DESTDIR)$(GIRDIR)/$(GIR_FILE)
 	rm -f $(DESTDIR)$(TYPELIBDIR)/$(TYPELIB_FILE)
+	rm -f $(DESTDIR)$(DATADIR)/crispy/config.c
+	-rmdir $(DESTDIR)$(DATADIR)/crispy 2>/dev/null || true

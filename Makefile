@@ -31,7 +31,10 @@ LIB_SRCS := \
 	src/core/crispy-gcc-compiler.c \
 	src/core/crispy-file-cache.c \
 	src/core/crispy-plugin-engine.c \
-	src/core/crispy-script.c
+	src/core/crispy-script.c \
+	src/core/crispy-source-utils-private.c \
+	src/core/crispy-config-context.c \
+	src/core/crispy-config-loader.c
 
 # Header files (for GIR scanner and installation)
 LIB_HDRS := \
@@ -44,7 +47,8 @@ LIB_HDRS := \
 	src/core/crispy-gcc-compiler.h \
 	src/core/crispy-file-cache.h \
 	src/core/crispy-plugin-engine.h \
-	src/core/crispy-script.h
+	src/core/crispy-script.h \
+	src/core/crispy-config-context.h
 
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
