@@ -215,14 +215,29 @@ crispy_file_cache_init(
 CrispyFileCache *
 crispy_file_cache_new(void)
 {
+    return crispy_file_cache_new_with_dir(NULL);
+}
+
+CrispyFileCache *
+crispy_file_cache_new_with_dir(
+    const gchar *cache_dir
+){
     CrispyFileCache *self;
     CrispyFileCachePrivate *priv;
 
     self = g_object_new(CRISPY_TYPE_FILE_CACHE, NULL);
     priv = crispy_file_cache_get_instance_private(self);
 
-    priv->cache_dir = g_build_filename(g_get_user_cache_dir(), "crispy", NULL);
-    g_mkdir_with_parents(priv->cache_dir, 0755);
+    /* use custom dir if provided, otherwise default to ~/.cache/crispy */
+    if (cache_dir != NULL)
+        priv->cache_dir = g_strdup(cache_dir);
+    else
+        priv->cache_dir = g_build_filename(g_get_user_cache_dir(), "crispy", NULL);
+
+    /* attempt to create the cache directory; warn on failure rather than
+     * aborting — the cache will simply miss every time if this fails */
+    if (g_mkdir_with_parents(priv->cache_dir, 0755) != 0)
+        g_warning("Failed to create cache directory '%s'", priv->cache_dir);
 
     return self;
 }
