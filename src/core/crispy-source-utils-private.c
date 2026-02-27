@@ -57,7 +57,7 @@ crispy_source_extract_params(
             if (start != NULL)
             {
                 start++; /* skip opening quote */
-                end = strrchr(start, '"');
+                end = memchr(start, '"', (gsize)(line_end - start));
                 if (end != NULL && end > start)
                     return g_strndup(start, (gsize)(end - start));
             }
