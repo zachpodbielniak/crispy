@@ -568,7 +568,8 @@ crispy_script_execute(
     /* [4] CACHE_CHECKED - check cache */
     t_phase = g_get_monotonic_time();
     cache_hit = FALSE;
-    if (!(priv->flags & CRISPY_FLAG_FORCE_COMPILE))
+    if (!(priv->flags & CRISPY_FLAG_FORCE_COMPILE) &&
+        !(priv->flags & CRISPY_FLAG_GDB))
     {
         cache_hit = crispy_cache_provider_has_valid(
             priv->cache, priv->hash, priv->source_path);
