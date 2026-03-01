@@ -239,6 +239,47 @@ test_script_preserve_source(void)
     g_unlink(path);
 }
 
+/* test: CRISPY_PARAMS with quotes later in file (regression for strrchr bug).
+ *
+ * Previously the extractor used strrchr to find the closing quote, which
+ * searched the entire file.  An apostrophe or quote character in a later
+ * comment (e.g. "LibreClaw's") would be mistaken for the closing quote,
+ * causing the entire source to be consumed as params.  The fix constrains
+ * the search to the current line using memchr bounded by line_end.
+ */
+static void
+test_script_crispy_params_quote_in_comment(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(CrispyScript) script = NULL;
+    g_autofree gchar *path = NULL;
+    gint exit_code;
+
+    path = write_temp_script(
+        "#define CRISPY_PARAMS \"-lm\"\n"
+        "#include <math.h>\n"
+        "#include <glib.h>\n"
+        "/* This is LibreClaw's test file -- apostrophe must not break params */\n"
+        "gint main(gint argc, gchar **argv){\n"
+        "    double val = sqrt(144.0);\n"
+        "    return (val == 12.0) ? 0 : 1;\n"
+        "}\n");
+
+    script = crispy_script_new_from_file(
+        path,
+        CRISPY_COMPILER(g_compiler),
+        CRISPY_CACHE_PROVIDER(g_cache),
+        CRISPY_FLAG_FORCE_COMPILE,
+        &error);
+    g_assert_no_error(error);
+
+    exit_code = crispy_script_execute(script, 1, &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(exit_code, ==, 0);
+
+    g_unlink(path);
+}
+
 /* test: argument passing to script */
 static void
 test_script_arg_passing(void)
@@ -294,6 +335,8 @@ main(
                     test_script_from_inline);
     g_test_add_func("/script/crispy-params",
                     test_script_crispy_params);
+    g_test_add_func("/script/crispy-params-quote-in-comment",
+                    test_script_crispy_params_quote_in_comment);
     g_test_add_func("/script/shebang-strip",
                     test_script_shebang_strip);
     g_test_add_func("/script/compile-error",
