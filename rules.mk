@@ -108,11 +108,6 @@ $(OUTDIR)/crispy-logo.h: data/logo.txt | $(OUTDIR)
 	@sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g; s/^/"/; s/$$/\\n"/' $< >> $@
 	@echo ";" >> $@
 
-# Header dependency generation
-$(OBJDIR)/%.d: src/%.c | $(OBJDIR)
-	@$(MKDIR_P) $(dir $@)
-	@$(CC) $(CFLAGS) -MM -MT '$(@:.d=.o)' $< > $@
-
 # Clean rules
 .PHONY: clean clean-all
 clean:

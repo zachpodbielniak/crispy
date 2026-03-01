@@ -67,6 +67,7 @@ CSTD := -std=gnu89
 # Base compiler flags
 CFLAGS_BASE := $(CSTD) -Wall -Wextra -Wno-unused-parameter
 CFLAGS_BASE += -fPIC
+CFLAGS_BASE += -MMD -MP
 
 # Debug/Release flags
 ifeq ($(DEBUG),1)
