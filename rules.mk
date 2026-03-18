@@ -64,11 +64,22 @@ $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)
 $(OUTDIR)/$(TYPELIB_FILE): $(OUTDIR)/$(GIR_FILE)
 	$(GIR_COMPILER) --output=$@ $<
 
+# LSP object compilation
+$(OBJDIR)/lsp/%.o: lsp/%.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(LSP_CFLAGS) -c $< -o $@
+
+# LSP binary linking
+$(OUTDIR)/$(LSP_BIN): $(LSP_OBJS) $(LSP_MAIN_OBJ)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) -o $@ $(LSP_OBJS) $(LSP_MAIN_OBJ) $(LSP_LDFLAGS)
+
 # Directory creation
 $(OBJDIR):
 	@$(MKDIR_P) $(OBJDIR)
 	@$(MKDIR_P) $(OBJDIR)/core
 	@$(MKDIR_P) $(OBJDIR)/interfaces
+	@$(MKDIR_P) $(OBJDIR)/lsp
 	@$(MKDIR_P) $(OBJDIR)/tests
 
 $(OUTDIR):
@@ -123,7 +134,7 @@ clean-all:
 # Installation rules
 .PHONY: install install-lib install-bin install-headers install-pc install-gir install-data
 
-install: install-lib install-bin install-headers install-pc install-data
+install: install-lib install-bin install-lsp install-headers install-pc install-data
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -132,6 +143,10 @@ install-bin: $(MAIN_OBJ) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(BINDIR)
 	$(CC) -o $(DESTDIR)$(BINDIR)/crispy $(MAIN_OBJ) \
 		-L$(OUTDIR) -lcrispy $(LDFLAGS) -Wl,-rpath,$(LIBDIR)
+
+install-lsp: $(OUTDIR)/$(LSP_BIN)
+	$(MKDIR_P) $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROGRAM) $(OUTDIR)/$(LSP_BIN) $(DESTDIR)$(BINDIR)/
 
 install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(LIBDIR)
@@ -173,6 +188,7 @@ install-gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/crispy
+	rm -f $(DESTDIR)$(BINDIR)/$(LSP_BIN)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_STATIC)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_FULL)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_MAJOR)

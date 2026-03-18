@@ -13,7 +13,7 @@
 #   make ASAN=1       - Build with AddressSanitizer
 
 .DEFAULT_GOAL := all
-.PHONY: all lib crispy gir test check-deps
+.PHONY: all lib crispy lsp gir test check-deps
 
 # Include configuration
 include config.mk
@@ -54,11 +54,25 @@ LIB_HDRS := \
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
 MAIN_OBJ := $(OBJDIR)/main.o
 
+# LSP source files
+LSP_DEPS := glib-2.0 gobject-2.0 gio-2.0 json-glib-1.0
+LSP_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) -Ilsp $(shell $(PKG_CONFIG) --cflags $(LSP_DEPS) 2>/dev/null)
+LSP_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(LSP_DEPS) 2>/dev/null) $(LDFLAGS_ASAN)
+
+LSP_SRCS := \
+	lsp/crispy-lsp-io.c \
+	lsp/crispy-lsp-document.c \
+	lsp/crispy-lsp-clangd.c \
+	lsp/crispy-lsp-server.c
+LSP_OBJS := $(patsubst lsp/%.c,$(OBJDIR)/lsp/%.o,$(LSP_SRCS))
+LSP_MAIN_OBJ := $(OBJDIR)/lsp/main.o
+LSP_BIN := crispy-language-server
+
 # Include build rules
 include rules.mk
 
 # Default target
-all: lib crispy
+all: lib crispy lsp
 ifeq ($(BUILD_GIR),1)
 all: gir
 endif
@@ -68,6 +82,9 @@ lib: src/crispy-version.h $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL) $
 
 # Build the executable
 crispy: lib $(OUTDIR)/crispy
+
+# Build the language server
+lsp: $(OUTDIR)/$(LSP_BIN)
 
 # Build GIR/typelib
 gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
