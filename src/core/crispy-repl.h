@@ -43,7 +43,7 @@ CrispyRepl *crispy_repl_new (CrispyCompiler      *compiler,
  *
  * Starts the interactive REPL loop with readline support.  Reads lines
  * from stdin, evaluates each one, and prints results until the user
- * types ".quit", "exit", or sends EOF (Ctrl-D).
+ * types ":quit", "exit", or sends EOF (Ctrl-D).
  *
  * Returns: %TRUE on clean exit, %FALSE on error
  */

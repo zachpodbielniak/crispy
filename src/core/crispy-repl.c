@@ -17,7 +17,7 @@
  *   - readline support for line editing and persistent history
  *   - multiline input (tracks brace/paren depth)
  *   - auto-print for bare expressions (lines without trailing ';')
- *   - meta-commands: .help, .clear, .preamble, .quit
+ *   - meta-commands: :help, :clear, :preamble, :quit
  *   - proper gcc error display on compilation failure
  *   - function/struct/typedef/enum preamble accumulation
  */
@@ -1081,14 +1081,14 @@ handle_meta_command(
     CrispyRepl  *self,
     const gchar *line
 ){
-    if (strcmp(line, ".help") == 0 || strcmp(line, ".h") == 0)
+    if (strcmp(line, ":help") == 0 || strcmp(line, ":h") == 0)
     {
         g_print("\n");
         g_print("  Meta-commands:\n");
-        g_print("    .help      Show this help\n");
-        g_print("    .clear     Reset preamble (includes, functions, etc.)\n");
-        g_print("    .preamble  Show accumulated preamble\n");
-        g_print("    .quit      Exit the REPL\n");
+        g_print("    :help      Show this help\n");
+        g_print("    :clear     Reset preamble (includes, functions, etc.)\n");
+        g_print("    :preamble  Show accumulated preamble\n");
+        g_print("    :quit      Exit the REPL\n");
         g_print("\n");
         g_print("  Usage:\n");
         g_print("    Expressions (no trailing ';') are auto-printed:\n");
@@ -1109,14 +1109,14 @@ handle_meta_command(
         return TRUE;
     }
 
-    if (strcmp(line, ".clear") == 0 || strcmp(line, ".c") == 0)
+    if (strcmp(line, ":clear") == 0 || strcmp(line, ":c") == 0)
     {
         crispy_repl_reset(self);
         g_print("Preamble cleared.\n");
         return TRUE;
     }
 
-    if (strcmp(line, ".preamble") == 0 || strcmp(line, ".p") == 0)
+    if (strcmp(line, ":preamble") == 0 || strcmp(line, ":p") == 0)
     {
         if (self->preamble->len == 0)
         {
@@ -1131,7 +1131,7 @@ handle_meta_command(
         return TRUE;
     }
 
-    if (strcmp(line, ".quit") == 0 || strcmp(line, ".q") == 0)
+    if (strcmp(line, ":quit") == 0 || strcmp(line, ":q") == 0)
     {
         /* handled by caller — this just signals the intent */
         return TRUE;
@@ -1164,7 +1164,7 @@ crispy_repl_start(
     /* welcome banner */
     g_print("Crispy REPL v%s — C expressions, compiled and executed.\n",
             "0.2.0");
-    g_print("  Type .help for commands, .quit or Ctrl-D to exit.\n\n");
+    g_print("  Type :help for commands, :quit or Ctrl-D to exit.\n\n");
 
     /* configure readline */
     rl_bind_key('\t', rl_insert); /* disable tab completion for now */
@@ -1195,15 +1195,15 @@ crispy_repl_start(
         if (depth == 0 &&
             (strcmp(line, "exit") == 0 ||
              strcmp(line, "quit") == 0 ||
-             strcmp(line, ".quit") == 0 ||
-             strcmp(line, ".q") == 0))
+             strcmp(line, ":quit") == 0 ||
+             strcmp(line, ":q") == 0))
         {
             free(line);
             break;
         }
 
         /* meta-commands (only when not in multiline mode) */
-        if (depth == 0 && line[0] == '.')
+        if (depth == 0 && line[0] == ':')
         {
             g_autofree gchar *trimmed = NULL;
 
@@ -1211,8 +1211,8 @@ crispy_repl_start(
             if (handle_meta_command(self, trimmed))
             {
                 /* add to history if it's not .quit */
-                if (strcmp(trimmed, ".quit") != 0 &&
-                    strcmp(trimmed, ".q") != 0)
+                if (strcmp(trimmed, ":quit") != 0 &&
+                    strcmp(trimmed, ":q") != 0)
                 {
                     add_history(line);
                 }
