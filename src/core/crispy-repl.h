@@ -26,10 +26,10 @@ G_DECLARE_FINAL_TYPE(CrispyRepl, crispy_repl, CRISPY, REPL, GObject)
  * @compiler: a #CrispyCompiler implementation
  * @cache: a #CrispyCacheProvider implementation
  *
- * Creates a new #CrispyRepl. The REPL wraps each line entered by the
- * user in a main() function, compiles it as a shared library, loads it,
- * and executes it.  Accumulated #include and #define lines are prepended
- * to every subsequent evaluation.
+ * Creates a new #CrispyRepl.  Each evaluated line is wrapped in an
+ * entry function, compiled as a shared library, and executed in-process.
+ * Preprocessor directives, function definitions, and type declarations
+ * accumulate in a preamble that is prepended to every subsequent eval.
  *
  * Returns: (transfer full): a new #CrispyRepl
  */
@@ -41,9 +41,9 @@ CrispyRepl *crispy_repl_new (CrispyCompiler      *compiler,
  * @self: a #CrispyRepl
  * @error: return location for a #GError, or %NULL
  *
- * Starts the interactive REPL loop. Reads lines from stdin, evaluates
- * each one, and prints results until the user types "exit", "quit",
- * or sends EOF (Ctrl-D). This function blocks until the loop exits.
+ * Starts the interactive REPL loop with readline support.  Reads lines
+ * from stdin, evaluates each one, and prints results until the user
+ * types ".quit", "exit", or sends EOF (Ctrl-D).
  *
  * Returns: %TRUE on clean exit, %FALSE on error
  */
@@ -53,22 +53,19 @@ gboolean crispy_repl_start (CrispyRepl  *self,
 /**
  * crispy_repl_eval:
  * @self: a #CrispyRepl
- * @code: a line of C code to evaluate
+ * @code: C code to evaluate (may be multiple lines)
  * @error: return location for a #GError, or %NULL
  *
- * Evaluates a single line of C code. If the line begins with #include
- * or #define it is accumulated into the preamble for future evaluations
- * rather than executed immediately. Otherwise the code is wrapped in a
- * main() function, compiled as a shared library, and executed.
- *
- * Emits #CrispyRepl::line-evaluated on success or
- * #CrispyRepl::error-occurred on failure.
+ * Evaluates C code.  Preprocessor directives are accumulated into the
+ * preamble.  Statements are wrapped in an entry function, compiled,
+ * loaded, and executed.  Compilation errors are reported via @error
+ * with the gcc diagnostic text.
  *
  * Returns: the exit code of the evaluated code (0 = success), or -1 on error
  */
 gint crispy_repl_eval (CrispyRepl   *self,
-                       const gchar  *code,
-                       GError      **error);
+                        const gchar  *code,
+                        GError      **error);
 
 /**
  * crispy_repl_set_prompt:
@@ -100,6 +97,24 @@ const gchar *crispy_repl_get_prompt (CrispyRepl *self);
  */
 void crispy_repl_set_extra_flags (CrispyRepl  *self,
                                    const gchar *flags);
+
+/**
+ * crispy_repl_reset:
+ * @self: a #CrispyRepl
+ *
+ * Clears the accumulated preamble and resets the REPL state.
+ */
+void crispy_repl_reset (CrispyRepl *self);
+
+/**
+ * crispy_repl_get_preamble:
+ * @self: a #CrispyRepl
+ *
+ * Returns the accumulated preamble (includes, defines, functions, etc.).
+ *
+ * Returns: (transfer none): the preamble string
+ */
+const gchar *crispy_repl_get_preamble (CrispyRepl *self);
 
 G_END_DECLS
 

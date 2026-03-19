@@ -92,6 +92,10 @@ endef
 CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(DEPS_REQUIRED) 2>/dev/null)
 LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(DEPS_REQUIRED) 2>/dev/null)
 
+# Readline (used by REPL)
+CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags readline 2>/dev/null)
+LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs readline 2>/dev/null)
+
 # Include paths
 CFLAGS_INC := -I. -Isrc -I$(OUTDIR)
 
@@ -143,7 +147,7 @@ show-config:
 
 # Fedora package names for dependencies
 FEDORA_DEPS_TOOLS := gcc make pkgconf-pkg-config
-FEDORA_DEPS_REQUIRED := glib2-devel
+FEDORA_DEPS_REQUIRED := glib2-devel readline-devel
 FEDORA_DEPS_GIR := gobject-introspection-devel
 
 # Install build dependencies (Fedora/dnf)
