@@ -26,11 +26,16 @@
 #include "crispy-plugin.h"
 #include "interfaces/crispy-compiler.h"
 #include "interfaces/crispy-cache-provider.h"
+#include "interfaces/crispy-dependency-resolver.h"
 #include "core/crispy-gcc-compiler.h"
 #include "core/crispy-file-cache.h"
 #include "core/crispy-plugin-engine.h"
 #include "core/crispy-script.h"
 #include "core/crispy-config-context.h"
+#include "core/crispy-dependency-info.h"
+#include "core/crispy-pkg-config-resolver.h"
+#include "core/crispy-watcher.h"
+#include "core/crispy-repl.h"
 
 #undef CRISPY_INSIDE
 

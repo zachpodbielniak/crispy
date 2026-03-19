@@ -3,6 +3,13 @@
 #define CRISPY_COMPILATION
 #include "crispy.h"
 #include "core/crispy-config-loader.h"
+#include "core/crispy-scaffolder-private.h"
+#include "core/crispy-installer-private.h"
+#include "core/crispy-test-runner-private.h"
+#include "core/crispy-linter-private.h"
+#include "core/crispy-profiler-private.h"
+#include "core/crispy-use-parser-private.h"
+#include "core/crispy-source-utils-private.h"
 #include "crispy-default-config.h"
 #include "crispy-logo.h"
 
@@ -51,6 +58,8 @@ static gboolean  opt_gen_config   = FALSE;
 static gboolean  opt_version      = FALSE;
 static gboolean  opt_license      = FALSE;
 static gboolean  opt_logo         = FALSE;
+static gboolean  opt_profile      = FALSE;
+static gboolean  opt_watch        = FALSE;
 static GOptionEntry entries[] =
 {
     {
@@ -116,6 +125,14 @@ static GOptionEntry entries[] =
     {
         "logo", 0, 0, G_OPTION_ARG_NONE, &opt_logo,
         "Show ASCII art logo", NULL
+    },
+    {
+        "profile", 0, 0, G_OPTION_ARG_NONE, &opt_profile,
+        "Compile with profiling and run gprof after execution", NULL
+    },
+    {
+        "watch", 'w', 0, G_OPTION_ARG_NONE, &opt_watch,
+        "Watch mode: re-run script on file changes", NULL
     },
     { NULL }
 };
@@ -269,6 +286,403 @@ split_argv(
     }
 }
 
+/* --- subcommand handlers --- */
+
+static gint
+handle_new(
+    gint    argc,
+    gchar **argv
+){
+    g_autoptr(GError) error = NULL;
+    g_autofree gchar *created_path = NULL;
+    const gchar *name     = NULL;
+    const gchar *template = NULL;
+    const gchar *dir      = NULL;
+    gint i;
+
+    /* parse: crispy new [--template=X] [--dir=X] NAME */
+    for (i = 2; i < argc; i++)
+    {
+        if (g_str_has_prefix(argv[i], "--template="))
+            template = argv[i] + strlen("--template=");
+        else if (g_str_has_prefix(argv[i], "--dir="))
+            dir = argv[i] + strlen("--dir=");
+        else if (argv[i][0] != '-')
+            name = argv[i];
+        else
+        {
+            g_printerr("Error: Unknown option for 'new': %s\n", argv[i]);
+            return 1;
+        }
+    }
+
+    if (name == NULL)
+    {
+        g_printerr("Error: 'crispy new' requires a script name.\n"
+                    "Usage: crispy new [--template=TEMPLATE] [--dir=DIR] NAME\n");
+        return 1;
+    }
+
+    created_path = crispy_scaffolder_create(name, dir, template, &error);
+    if (created_path == NULL)
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    g_print("Created: %s\n", created_path);
+    return 0;
+}
+
+static gint
+handle_install(
+    gint    argc,
+    gchar **argv
+){
+    g_autoptr(GError) error = NULL;
+    g_autoptr(CrispyGccCompiler) compiler = NULL;
+    g_autoptr(CrispyFileCache) cache = NULL;
+    g_autofree gchar *source = NULL;
+    g_autofree gchar *params_raw = NULL;
+    g_autofree gchar *params_flags = NULL;
+    g_autofree gchar *use_flags = NULL;
+    g_autofree gchar *combined_flags = NULL;
+    g_autofree gchar *installed_path = NULL;
+    g_autoptr(CrispyPkgConfigResolver) resolver = NULL;
+    const gchar *path = NULL;
+    const gchar *dir  = NULL;
+    gsize source_len;
+    gint i;
+
+    /* parse: crispy install [--dir=X] SCRIPT.c */
+    for (i = 2; i < argc; i++)
+    {
+        if (g_str_has_prefix(argv[i], "--dir="))
+            dir = argv[i] + strlen("--dir=");
+        else if (argv[i][0] != '-')
+            path = argv[i];
+        else
+        {
+            g_printerr("Error: Unknown option for 'install': %s\n", argv[i]);
+            return 1;
+        }
+    }
+
+    if (path == NULL)
+    {
+        g_printerr("Error: 'crispy install' requires a script path.\n"
+                    "Usage: crispy install [--dir=DIR] SCRIPT.c\n");
+        return 1;
+    }
+
+    compiler = crispy_gcc_compiler_new(&error);
+    if (compiler == NULL)
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    cache = crispy_file_cache_new_with_dir(NULL);
+
+    /* read source to extract CRISPY_PARAMS and CRISPY_USE */
+    if (!g_file_get_contents(path, &source, &source_len, &error))
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    params_raw = crispy_source_extract_params(source);
+    if (params_raw != NULL)
+    {
+        params_flags = crispy_source_shell_expand(params_raw, &error);
+        if (params_flags == NULL)
+        {
+            g_printerr("Warning: Failed to expand CRISPY_PARAMS: %s\n",
+                        error->message);
+            g_clear_error(&error);
+        }
+    }
+
+    resolver = crispy_pkg_config_resolver_new();
+    use_flags = crispy_use_parser_resolve(
+        source,
+        CRISPY_DEPENDENCY_RESOLVER(resolver),
+        &error);
+    if (use_flags == NULL && error != NULL)
+    {
+        g_printerr("Warning: Failed to resolve CRISPY_USE: %s\n",
+                    error->message);
+        g_clear_error(&error);
+    }
+
+    /* combine params and use flags */
+    if (params_flags != NULL && use_flags != NULL)
+        combined_flags = g_strconcat(params_flags, " ", use_flags, NULL);
+    else if (params_flags != NULL)
+        combined_flags = g_strdup(params_flags);
+    else if (use_flags != NULL)
+        combined_flags = g_strdup(use_flags);
+
+    installed_path = crispy_installer_install(
+        path, dir,
+        CRISPY_COMPILER(compiler),
+        combined_flags,
+        &error);
+    if (installed_path == NULL)
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    g_print("Installed: %s\n", installed_path);
+    return 0;
+}
+
+static gint
+handle_test(
+    gint    argc,
+    gchar **argv
+){
+    g_autoptr(GError) error = NULL;
+    g_autoptr(CrispyGccCompiler) compiler = NULL;
+    g_autoptr(CrispyFileCache) cache = NULL;
+    g_autofree gchar *source = NULL;
+    g_autofree gchar *params_raw = NULL;
+    g_autofree gchar *params_flags = NULL;
+    g_autofree gchar *use_flags = NULL;
+    g_autofree gchar *combined_flags = NULL;
+    g_autoptr(CrispyPkgConfigResolver) resolver = NULL;
+    const gchar *path = NULL;
+    gsize source_len;
+    gint result;
+
+    if (argc < 3 || argv[2][0] == '-')
+    {
+        g_printerr("Error: 'crispy test' requires a script path.\n"
+                    "Usage: crispy test SCRIPT.c\n");
+        return 1;
+    }
+
+    path = argv[2];
+
+    compiler = crispy_gcc_compiler_new(&error);
+    if (compiler == NULL)
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    cache = crispy_file_cache_new_with_dir(NULL);
+
+    /* read source to extract extra flags */
+    if (!g_file_get_contents(path, &source, &source_len, &error))
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    params_raw = crispy_source_extract_params(source);
+    if (params_raw != NULL)
+    {
+        params_flags = crispy_source_shell_expand(params_raw, &error);
+        if (params_flags == NULL)
+        {
+            g_printerr("Warning: Failed to expand CRISPY_PARAMS: %s\n",
+                        error->message);
+            g_clear_error(&error);
+        }
+    }
+
+    resolver = crispy_pkg_config_resolver_new();
+    use_flags = crispy_use_parser_resolve(
+        source,
+        CRISPY_DEPENDENCY_RESOLVER(resolver),
+        &error);
+    if (use_flags == NULL && error != NULL)
+    {
+        g_printerr("Warning: Failed to resolve CRISPY_USE: %s\n",
+                    error->message);
+        g_clear_error(&error);
+    }
+
+    if (params_flags != NULL && use_flags != NULL)
+        combined_flags = g_strconcat(params_flags, " ", use_flags, NULL);
+    else if (params_flags != NULL)
+        combined_flags = g_strdup(params_flags);
+    else if (use_flags != NULL)
+        combined_flags = g_strdup(use_flags);
+
+    result = crispy_test_runner_run(
+        path,
+        CRISPY_COMPILER(compiler),
+        CRISPY_CACHE_PROVIDER(cache),
+        combined_flags,
+        &error);
+
+    if (result < 0)
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    return (result > 0) ? 1 : 0;
+}
+
+static gint
+handle_lint(
+    gint    argc,
+    gchar **argv
+){
+    g_autoptr(GError) error = NULL;
+    g_autofree gchar *source = NULL;
+    g_autofree gchar *params_raw = NULL;
+    g_autofree gchar *params_flags = NULL;
+    g_autofree gchar *use_flags = NULL;
+    g_autofree gchar *combined_flags = NULL;
+    g_autofree gchar *output = NULL;
+    g_autoptr(CrispyPkgConfigResolver) resolver = NULL;
+    const gchar *path = NULL;
+    gsize source_len;
+    gboolean clean;
+
+    if (argc < 3 || argv[2][0] == '-')
+    {
+        g_printerr("Error: 'crispy lint' requires a script path.\n"
+                    "Usage: crispy lint SCRIPT.c\n");
+        return 1;
+    }
+
+    path = argv[2];
+
+    /* read source to extract extra flags */
+    if (!g_file_get_contents(path, &source, &source_len, &error))
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    params_raw = crispy_source_extract_params(source);
+    if (params_raw != NULL)
+    {
+        params_flags = crispy_source_shell_expand(params_raw, &error);
+        if (params_flags == NULL)
+        {
+            g_printerr("Warning: Failed to expand CRISPY_PARAMS: %s\n",
+                        error->message);
+            g_clear_error(&error);
+        }
+    }
+
+    resolver = crispy_pkg_config_resolver_new();
+    use_flags = crispy_use_parser_resolve(
+        source,
+        CRISPY_DEPENDENCY_RESOLVER(resolver),
+        &error);
+    if (use_flags == NULL && error != NULL)
+    {
+        g_printerr("Warning: Failed to resolve CRISPY_USE: %s\n",
+                    error->message);
+        g_clear_error(&error);
+    }
+
+    if (params_flags != NULL && use_flags != NULL)
+        combined_flags = g_strconcat(params_flags, " ", use_flags, NULL);
+    else if (params_flags != NULL)
+        combined_flags = g_strdup(params_flags);
+    else if (use_flags != NULL)
+        combined_flags = g_strdup(use_flags);
+
+    clean = crispy_linter_check(path, combined_flags, &output, &error);
+    if (error != NULL)
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    if (clean)
+    {
+        g_print("No warnings.\n");
+        return 0;
+    }
+
+    if (output != NULL)
+        g_print("%s", output);
+
+    return 1;
+}
+
+static gint
+handle_repl(
+    gint    argc,
+    gchar **argv
+){
+    g_autoptr(GError) error = NULL;
+    g_autoptr(CrispyGccCompiler) compiler = NULL;
+    g_autoptr(CrispyFileCache) cache = NULL;
+    g_autoptr(CrispyRepl) repl = NULL;
+
+    (void)argc;
+    (void)argv;
+
+    compiler = crispy_gcc_compiler_new(&error);
+    if (compiler == NULL)
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    cache = crispy_file_cache_new_with_dir(NULL);
+
+    repl = crispy_repl_new(
+        CRISPY_COMPILER(compiler),
+        CRISPY_CACHE_PROVIDER(cache));
+
+    if (!crispy_repl_start(repl, &error))
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * handle_subcommand:
+ * @argc: original argument count
+ * @argv: original argument vector
+ *
+ * Checks whether argv[1] is a known subcommand. If so, dispatches to
+ * the appropriate handler and returns its exit code. Returns -1 if
+ * argv[1] is not a subcommand (so normal flag parsing can proceed).
+ *
+ * Returns: exit code (>= 0) if a subcommand was handled, -1 otherwise
+ */
+static gint
+handle_subcommand(
+    gint    argc,
+    gchar **argv
+){
+    if (argc < 2 || argv[1][0] == '-')
+        return -1;
+
+    if (strcmp(argv[1], "new") == 0)
+        return handle_new(argc, argv);
+
+    if (strcmp(argv[1], "install") == 0)
+        return handle_install(argc, argv);
+
+    if (strcmp(argv[1], "test") == 0)
+        return handle_test(argc, argv);
+
+    if (strcmp(argv[1], "lint") == 0)
+        return handle_lint(argc, argv);
+
+    if (strcmp(argv[1], "repl") == 0)
+        return handle_repl(argc, argv);
+
+    return -1;
+}
+
 gint
 main(
     gint    argc,
@@ -297,6 +711,14 @@ main(
     preloaded_lib = NULL;
     exit_code = 0;
     config_loaded = FALSE;
+
+    /* check for subcommands before option parsing */
+    {
+        gint sub_ret;
+        sub_ret = handle_subcommand(argc, argv);
+        if (sub_ret >= 0)
+            return sub_ret;
+    }
 
     /*
      * Split argv before GOptionContext sees it. Everything after the
@@ -331,6 +753,13 @@ main(
             "\n"
             "Arguments after the script path are passed to the script, not crispy.\n"
             "\n"
+            "Subcommands:\n"
+            "  crispy new [--template=TEMPLATE] [--dir=DIR] NAME\n"
+            "  crispy install [--dir=DIR] SCRIPT.c\n"
+            "  crispy test SCRIPT.c\n"
+            "  crispy lint SCRIPT.c\n"
+            "  crispy repl\n"
+            "\n"
             "Examples:\n"
             "  crispy script.c\n"
             "  crispy script.c arg1 arg2\n"
@@ -339,6 +768,7 @@ main(
             "  crispy -i 'g_print(\"hello\\n\"); return 0;'\n"
             "  echo 'g_print(\"hello\\n\"); return 0;' | crispy -\n"
             "  crispy --gdb script.c\n"
+            "  crispy --watch script.c\n"
             "  chmod +x script.c && ./script.c  (with #!/usr/bin/crispy shebang)",
             logo);
 
@@ -547,6 +977,10 @@ main(
         flags |= CRISPY_FLAG_DRY_RUN;
     if (opt_gdb)
         flags |= CRISPY_FLAG_GDB;
+    if (opt_profile)
+        flags |= CRISPY_FLAG_PROFILE;
+    if (opt_watch)
+        flags |= CRISPY_FLAG_WATCH;
 
     /* preload library if requested */
     if (opt_preload != NULL)
@@ -727,6 +1161,38 @@ main(
     {
         g_printerr("Temp source preserved: %s\n",
                     crispy_script_get_temp_source_path(script));
+    }
+
+    /* handle --profile: note that gmon.out was generated */
+    if (exit_code == 0 && (flags & CRISPY_FLAG_PROFILE))
+    {
+        g_printerr("Profiling complete. gmon.out generated in current directory.\n"
+                    "Run: gprof %s gmon.out | less\n",
+                    script_argv != NULL ? script_argv[0] : "a.out");
+    }
+
+    /* handle --watch: enter the watch loop after the initial run */
+    if (flags & CRISPY_FLAG_WATCH)
+    {
+        g_autoptr(CrispyWatcher) watcher = NULL;
+
+        if (script_argc > 0 && script_argv != NULL)
+        {
+            watcher = crispy_watcher_new(
+                script_argv[0],
+                CRISPY_COMPILER(compiler),
+                CRISPY_CACHE_PROVIDER(cache),
+                flags & ~CRISPY_FLAG_WATCH);
+            crispy_watcher_set_script_argv(watcher, script_argc, script_argv);
+
+            g_printerr("Watching %s for changes (Ctrl+C to stop)...\n",
+                        script_argv[0]);
+            if (!crispy_watcher_start(watcher, &error))
+            {
+                g_printerr("Watch error: %s\n", error->message);
+                exit_code = 1;
+            }
+        }
     }
 
 cleanup:

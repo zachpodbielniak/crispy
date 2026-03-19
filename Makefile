@@ -28,13 +28,27 @@ endif
 LIB_SRCS := \
 	src/interfaces/crispy-compiler.c \
 	src/interfaces/crispy-cache-provider.c \
+	src/interfaces/crispy-dependency-resolver.c \
 	src/core/crispy-gcc-compiler.c \
 	src/core/crispy-file-cache.c \
 	src/core/crispy-plugin-engine.c \
 	src/core/crispy-script.c \
 	src/core/crispy-source-utils-private.c \
 	src/core/crispy-config-context.c \
-	src/core/crispy-config-loader.c
+	src/core/crispy-config-loader.c \
+	src/core/crispy-dependency-info.c \
+	src/core/crispy-pkg-config-resolver.c \
+	src/core/crispy-shebang-parser-private.c \
+	src/core/crispy-use-parser-private.c \
+	src/core/crispy-header-tracker-private.c \
+	src/core/crispy-error-analyzer-private.c \
+	src/core/crispy-watcher.c \
+	src/core/crispy-profiler-private.c \
+	src/core/crispy-scaffolder-private.c \
+	src/core/crispy-linter-private.c \
+	src/core/crispy-installer-private.c \
+	src/core/crispy-test-runner-private.c \
+	src/core/crispy-repl.c
 
 # Header files (for GIR scanner and installation)
 LIB_HDRS := \
@@ -44,11 +58,16 @@ LIB_HDRS := \
 	src/crispy-plugin.h \
 	src/interfaces/crispy-compiler.h \
 	src/interfaces/crispy-cache-provider.h \
+	src/interfaces/crispy-dependency-resolver.h \
 	src/core/crispy-gcc-compiler.h \
 	src/core/crispy-file-cache.h \
 	src/core/crispy-plugin-engine.h \
 	src/core/crispy-script.h \
-	src/core/crispy-config-context.h
+	src/core/crispy-config-context.h \
+	src/core/crispy-dependency-info.h \
+	src/core/crispy-pkg-config-resolver.h \
+	src/core/crispy-watcher.h \
+	src/core/crispy-repl.h
 
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
