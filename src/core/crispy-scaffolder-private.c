@@ -240,7 +240,10 @@ crispy_scaffolder_create (const gchar  *name,
     }
 
     /* Build the output filename and full path. */
-    filename = g_strdup_printf("%s.c", name);
+    if (g_str_has_suffix(name, ".c"))
+        filename = g_strdup(name);
+    else
+        filename = g_strdup_printf("%s.c", name);
     path = g_build_filename(directory != NULL ? directory : ".", filename, NULL);
 
     /* Refuse to overwrite an existing file. */

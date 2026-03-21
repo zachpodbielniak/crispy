@@ -141,22 +141,26 @@ crispy_linter_check (const gchar  *source_path,
      * perform parsing and type-checking without producing any output
      * file, which is exactly what a linter needs.
      */
-    if (extra_flags != NULL && extra_flags[0] != '\0')
     {
-        cmd = g_strdup_printf(
-            "gcc -std=gnu89 -Wall -Wextra %s %s %s -fsyntax-only %s",
-            LINT_FLAGS,
-            glib_cflags,
-            extra_flags,
-            source_path);
-    }
-    else
-    {
-        cmd = g_strdup_printf(
-            "gcc -std=gnu89 -Wall -Wextra %s %s -fsyntax-only %s",
-            LINT_FLAGS,
-            glib_cflags,
-            source_path);
+        g_autofree gchar *q_path = g_shell_quote(source_path);
+
+        if (extra_flags != NULL && extra_flags[0] != '\0')
+        {
+            cmd = g_strdup_printf(
+                "gcc -std=gnu89 -Wall -Wextra %s %s %s -fsyntax-only %s",
+                LINT_FLAGS,
+                glib_cflags,
+                extra_flags,
+                q_path);
+        }
+        else
+        {
+            cmd = g_strdup_printf(
+                "gcc -std=gnu89 -Wall -Wextra %s %s -fsyntax-only %s",
+                LINT_FLAGS,
+                glib_cflags,
+                q_path);
+        }
     }
 
     spawn_ok = g_spawn_command_line_sync(cmd, &std_out, &std_err,

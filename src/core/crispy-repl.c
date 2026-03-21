@@ -36,6 +36,10 @@
 #include <unistd.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include "../crispy-version.h"
+
+/* Maximum entries saved to the persistent history file. */
+#define REPL_HISTORY_MAX (1000)
 
 /* ------------------------------------------------------------------ */
 /* property / signal enums                                             */
@@ -370,7 +374,8 @@ compute_depth_delta(
             i += 2;
             while (i + 1 < len && !(line[i] == '*' && line[i + 1] == '/'))
                 i++;
-            i++; /* skip past '/' */
+            if (i + 1 < len)
+                i++; /* skip past '/', for-loop will advance past it */
             continue;
         }
 
@@ -460,7 +465,18 @@ is_preamble_code(
             g_str_has_prefix(p, "GSList ") ||
             g_str_has_prefix(p, "GPtrArray ") ||
             g_str_has_prefix(p, "GHashTable ") ||
-            g_str_has_prefix(p, "GString "))
+            g_str_has_prefix(p, "GString ") ||
+            g_str_has_prefix(p, "GBytes ") ||
+            g_str_has_prefix(p, "GObject ") ||
+            g_str_has_prefix(p, "GFile ") ||
+            g_str_has_prefix(p, "GVariant ") ||
+            g_str_has_prefix(p, "FILE ") ||
+            g_str_has_prefix(p, "size_t ") ||
+            g_str_has_prefix(p, "ssize_t ") ||
+            g_str_has_prefix(p, "gint64 ") ||
+            g_str_has_prefix(p, "guint64 ") ||
+            g_str_has_prefix(p, "gdouble ") ||
+            g_str_has_prefix(p, "gfloat "))
         {
             return TRUE;
         }
@@ -536,7 +552,23 @@ is_expression(
         g_str_has_prefix(code, "GString ") ||
         g_str_has_prefix(code, "GError ") ||
         g_str_has_prefix(code, "GPtrArray ") ||
-        g_str_has_prefix(code, "GHashTable "))
+        g_str_has_prefix(code, "GHashTable ") ||
+        g_str_has_prefix(code, "GBytes ") ||
+        g_str_has_prefix(code, "GObject ") ||
+        g_str_has_prefix(code, "GFile ") ||
+        g_str_has_prefix(code, "GVariant ") ||
+        g_str_has_prefix(code, "FILE ") ||
+        g_str_has_prefix(code, "size_t ") ||
+        g_str_has_prefix(code, "ssize_t ") ||
+        g_str_has_prefix(code, "gint64 ") ||
+        g_str_has_prefix(code, "guint64 ") ||
+        g_str_has_prefix(code, "gdouble ") ||
+        g_str_has_prefix(code, "gfloat ") ||
+        g_str_has_prefix(code, "GError ") ||
+        g_str_has_prefix(code, "GDateTime ") ||
+        g_str_has_prefix(code, "GArray ") ||
+        g_str_has_prefix(code, "GByteArray ") ||
+        g_str_has_prefix(code, "GRegex "))
     {
         return FALSE;
     }
@@ -754,7 +786,6 @@ try_compile_source(
         compile_flags, compiler_version);
 
     so_path = crispy_cache_provider_get_path(self->cache, hash);
-    g_free(hash);
 
     /* compile if not cached */
     if (!crispy_cache_provider_has_valid(self->cache, hash, NULL))
@@ -766,12 +797,14 @@ try_compile_source(
                                                 ? compile_flags : NULL,
                                             error))
         {
+            g_free(hash);
             g_unlink(temp_path);
             g_free(so_path);
             return NULL;
         }
     }
 
+    g_free(hash);
     g_unlink(temp_path);
     return so_path;
 }
@@ -1073,6 +1106,21 @@ crispy_repl_eval(
 }
 
 /* ------------------------------------------------------------------ */
+/* helpers: history file path                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * get_history_path:
+ *
+ * Returns the path to ~/.crispy_history.  The caller must free with g_free().
+ */
+static gchar *
+get_history_path(void)
+{
+    return g_build_filename(g_get_home_dir(), ".crispy_history", NULL);
+}
+
+/* ------------------------------------------------------------------ */
 /* meta-command handlers                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1085,10 +1133,12 @@ handle_meta_command(
     {
         g_print("\n");
         g_print("  Meta-commands:\n");
-        g_print("    :help      Show this help\n");
-        g_print("    :clear     Reset preamble (includes, functions, etc.)\n");
-        g_print("    :preamble  Show accumulated preamble\n");
-        g_print("    :quit      Exit the REPL\n");
+        g_print("    :help          Show this help\n");
+        g_print("    :clear         Reset preamble (includes, functions, etc.)\n");
+        g_print("    :preamble      Show accumulated preamble\n");
+        g_print("    :load <file>   Load a C file into the preamble\n");
+        g_print("    :type <expr>   Show the type of an expression\n");
+        g_print("    :quit          Exit the REPL\n");
         g_print("\n");
         g_print("  Usage:\n");
         g_print("    Expressions (no trailing ';') are auto-printed:\n");
@@ -1137,6 +1187,121 @@ handle_meta_command(
         return TRUE;
     }
 
+    /* :load <file> — read a C file and add its contents to the preamble */
+    if (g_str_has_prefix(line, ":load ") || g_str_has_prefix(line, ":l "))
+    {
+        const gchar *path;
+        g_autofree gchar *contents = NULL;
+        g_autoptr(GError) err = NULL;
+
+        path = line + (line[1] == 'l' && line[2] == ' ' ? 3 : 6);
+
+        /* skip leading whitespace */
+        while (*path == ' ' || *path == '\t')
+            path++;
+
+        if (path[0] == '\0')
+        {
+            g_print("Usage: :load <file>\n");
+            return TRUE;
+        }
+
+        if (!g_file_get_contents(path, &contents, NULL, &err))
+        {
+            fprintf(stderr, "\033[31merror:\033[0m %s\n", err->message);
+            return TRUE;
+        }
+
+        g_string_append(self->preamble, contents);
+        if (contents[strlen(contents) - 1] != '\n')
+            g_string_append_c(self->preamble, '\n');
+
+        g_print("Loaded %s into preamble.\n", path);
+        return TRUE;
+    }
+
+    /* :type <expr> — show the type of an expression using __typeof__ */
+    if (g_str_has_prefix(line, ":type ") || g_str_has_prefix(line, ":t "))
+    {
+        const gchar *expr;
+        g_autofree gchar *source = NULL;
+        g_autofree gchar *so_path_type = NULL;
+        g_autoptr(GError) err = NULL;
+
+        expr = line + (line[1] == 't' && line[2] == ' ' ? 3 : 6);
+
+        while (*expr == ' ' || *expr == '\t')
+            expr++;
+
+        if (expr[0] == '\0')
+        {
+            g_print("Usage: :type <expression>\n");
+            return TRUE;
+        }
+
+        /*
+         * Use __builtin_types_compatible_p to classify the expression
+         * at compile time.  This is a gcc extension available in gnu89.
+         */
+        {
+            GString *s;
+
+            s = g_string_new(NULL);
+            g_string_append(s, "#include <stdio.h>\n");
+            g_string_append(s, "#include <stdlib.h>\n");
+            g_string_append(s, "#include <string.h>\n");
+            g_string_append(s, "#include <glib.h>\n");
+            g_string_append(s, "#include <gio/gio.h>\n");
+
+            if (self->preamble->len > 0)
+            {
+                g_string_append(s, self->preamble->str);
+                if (self->preamble->str[self->preamble->len - 1] != '\n')
+                    g_string_append_c(s, '\n');
+            }
+
+            g_string_append(s, "\nint\n_crispy_eval(void)\n{\n");
+            g_string_append_printf(s,
+                "    __typeof__(%s) _type_probe;\n"
+                "    (void)_type_probe;\n"
+                "    printf(\"%%s\\n\",\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), int)           ? \"int\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), unsigned int)  ? \"unsigned int\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), long)          ? \"long\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), unsigned long) ? \"unsigned long\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), short)         ? \"short\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), char)          ? \"char\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), float)         ? \"float\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), double)        ? \"double\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), char *)        ? \"char *\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), const char *)  ? \"const char *\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), void *)        ? \"void *\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), gint)          ? \"gint\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), guint)         ? \"guint\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), gboolean)      ? \"gboolean\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), gchar *)       ? \"gchar *\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), gsize)         ? \"gsize\" :\n"
+                "        __builtin_types_compatible_p(__typeof__(%s), gint64)        ? \"gint64\" :\n"
+                "        \"(other type)\"\n"
+                "    );\n",
+                expr, expr, expr, expr, expr, expr, expr, expr,
+                expr, expr, expr, expr, expr, expr, expr, expr, expr, expr);
+            g_string_append(s, "    return 0;\n}\n");
+
+            source = g_string_free(s, FALSE);
+        }
+
+        so_path_type = try_compile_source(self, source, &err);
+        if (so_path_type == NULL)
+        {
+            fprintf(stderr, "\033[31merror:\033[0m cannot determine type\n");
+            return TRUE;
+        }
+
+        execute_module(so_path_type, NULL);
+        return TRUE;
+    }
+
     return FALSE;
 }
 
@@ -1163,11 +1328,20 @@ crispy_repl_start(
 
     /* welcome banner */
     g_print("Crispy REPL v%s — C expressions, compiled and executed.\n",
-            "0.2.0");
+            CRISPY_VERSION_STRING);
     g_print("  Type :help for commands, :quit or Ctrl-D to exit.\n\n");
 
     /* configure readline */
     rl_bind_key('\t', rl_insert); /* disable tab completion for now */
+
+    /* load persistent history */
+    {
+        g_autofree gchar *hist_path = get_history_path();
+
+        using_history();
+        stifle_history(REPL_HISTORY_MAX);
+        read_history(hist_path);
+    }
 
     while (TRUE)
     {
@@ -1272,5 +1446,13 @@ crispy_repl_start(
     }
 
     g_string_free(accum, TRUE);
+
+    /* save persistent history */
+    {
+        g_autofree gchar *hist_path = get_history_path();
+
+        write_history(hist_path);
+    }
+
     return TRUE;
 }

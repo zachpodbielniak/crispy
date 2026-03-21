@@ -48,7 +48,12 @@ crispy_profiler_run_gprof(
 
     effective_gmon = (gmon_path != NULL) ? gmon_path : "gmon.out";
 
-    cmd = g_strdup_printf("gprof %s %s", executable_path, effective_gmon);
+    {
+        g_autofree gchar *q_exe = g_shell_quote(executable_path);
+        g_autofree gchar *q_gmon = g_shell_quote(effective_gmon);
+
+        cmd = g_strdup_printf("gprof %s %s", q_exe, q_gmon);
+    }
 
     std_out      = NULL;
     std_err      = NULL;

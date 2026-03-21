@@ -125,15 +125,21 @@ write_temp_source(
     priv->temp_source_path = tmpl;
 
     /* write the modified source */
-    if (write(fd, priv->modified_source, priv->modified_len) < 0)
     {
-        g_set_error(error,
-                    CRISPY_ERROR,
-                    CRISPY_ERROR_IO,
-                    "Failed to write temp source: %s",
-                    g_strerror(errno));
-        close(fd);
-        return FALSE;
+        gssize nwritten;
+
+        nwritten = write(fd, priv->modified_source, priv->modified_len);
+        if (nwritten < 0 || (gsize)nwritten != priv->modified_len)
+        {
+            g_set_error(error,
+                        CRISPY_ERROR,
+                        CRISPY_ERROR_IO,
+                        "Failed to write temp source: %s",
+                        nwritten < 0 ? g_strerror(errno)
+                                     : "short write");
+            close(fd);
+            return FALSE;
+        }
     }
 
     close(fd);
