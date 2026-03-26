@@ -145,13 +145,41 @@ show-config:
 	@echo "BUILD_GIR:    $(BUILD_GIR)"
 	@echo "BUILD_TESTS:  $(BUILD_TESTS)"
 
-# Fedora package names for dependencies
-FEDORA_DEPS_TOOLS := gcc make pkgconf-pkg-config
-FEDORA_DEPS_REQUIRED := glib2-devel readline-devel
+# Distro detection for install-deps
+DISTRO_ID := $(shell . /etc/os-release 2>/dev/null && echo $$ID)
+
+# Package names per distro
+FEDORA_DEPS := gcc make pkgconf-pkg-config glib2-devel readline-devel
 FEDORA_DEPS_GIR := gobject-introspection-devel
 
-# Install build dependencies (Fedora/dnf)
+UBUNTU_DEPS := gcc make pkg-config libglib2.0-dev libreadline-dev
+UBUNTU_DEPS_GIR := gobject-introspection libgirepository1.0-dev
+
+ARCH_DEPS := gcc make pkgconf glib2 readline
+ARCH_DEPS_GIR := gobject-introspection
+
+# Install build dependencies (auto-detects Fedora, Ubuntu/Debian, Arch)
 .PHONY: install-deps
 install-deps:
-	sudo dnf install -y $(FEDORA_DEPS_TOOLS) $(FEDORA_DEPS_REQUIRED) \
+ifeq ($(DISTRO_ID),fedora)
+	sudo dnf install -y $(FEDORA_DEPS) \
 		$(if $(filter 1,$(BUILD_GIR)),$(FEDORA_DEPS_GIR))
+else ifeq ($(DISTRO_ID),ubuntu)
+	sudo apt-get update && sudo apt-get install -y $(UBUNTU_DEPS) \
+		$(if $(filter 1,$(BUILD_GIR)),$(UBUNTU_DEPS_GIR))
+else ifeq ($(DISTRO_ID),debian)
+	sudo apt-get update && sudo apt-get install -y $(UBUNTU_DEPS) \
+		$(if $(filter 1,$(BUILD_GIR)),$(UBUNTU_DEPS_GIR))
+else ifeq ($(DISTRO_ID),arch)
+	sudo pacman -S --needed --noconfirm $(ARCH_DEPS) \
+		$(if $(filter 1,$(BUILD_GIR)),$(ARCH_DEPS_GIR))
+else
+	@echo "Unsupported distro: $(DISTRO_ID)"
+	@echo "Supported: fedora, ubuntu, debian, arch"
+	@echo ""
+	@echo "Required packages (install manually):"
+	@echo "  gcc, make, pkg-config"
+	@echo "  glib-2.0, gobject-2.0, gio-2.0, gmodule-2.0 (dev headers)"
+	@echo "  readline (dev headers)"
+	@exit 1
+endif
