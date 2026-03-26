@@ -81,7 +81,7 @@ else
 endif
 
 # Required dependencies
-DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
+DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 json-glib-1.0
 
 # Check for required dependencies
 define check_dep
@@ -149,13 +149,13 @@ show-config:
 DISTRO_ID := $(shell . /etc/os-release 2>/dev/null && echo $$ID)
 
 # Package names per distro
-FEDORA_DEPS := gcc make pkgconf-pkg-config glib2-devel readline-devel
+FEDORA_DEPS := gcc make pkgconf-pkg-config glib2-devel readline-devel json-glib-devel
 FEDORA_DEPS_GIR := gobject-introspection-devel
 
-UBUNTU_DEPS := gcc make pkg-config libglib2.0-dev libreadline-dev
+UBUNTU_DEPS := gcc make pkg-config libglib2.0-dev libreadline-dev libjson-glib-dev
 UBUNTU_DEPS_GIR := gobject-introspection libgirepository1.0-dev
 
-ARCH_DEPS := gcc make pkgconf glib2 readline
+ARCH_DEPS := gcc make pkgconf glib2 readline json-glib
 ARCH_DEPS_GIR := gobject-introspection
 
 # Install build dependencies (auto-detects Fedora, Ubuntu/Debian, Arch)
@@ -180,6 +180,7 @@ else
 	@echo "Required packages (install manually):"
 	@echo "  gcc, make, pkg-config"
 	@echo "  glib-2.0, gobject-2.0, gio-2.0, gmodule-2.0 (dev headers)"
+	@echo "  json-glib-1.0 (dev headers)"
 	@echo "  readline (dev headers)"
 	@exit 1
 endif
