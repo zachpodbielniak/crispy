@@ -1,6 +1,8 @@
 /* crispy-file-cache.c - Filesystem CrispyCacheProvider implementation */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-file-cache.h"
 #include "../interfaces/crispy-cache-provider.h"
 #include "../crispy-types.h"

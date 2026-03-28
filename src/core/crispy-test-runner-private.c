@@ -10,7 +10,9 @@
  * and the full compile-load-run pipeline for `crispy test`.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-test-runner-private.h"
 #include "crispy-source-utils-private.h"
 #include "../interfaces/crispy-compiler.h"

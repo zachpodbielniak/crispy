@@ -7,7 +7,9 @@
  * the same logic without duplication.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-source-utils-private.h"
 #include "../crispy-types.h"
 

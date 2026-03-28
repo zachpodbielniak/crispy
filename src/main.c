@@ -1,6 +1,8 @@
 /* main.c - Crispy CLI entry point */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy.h"
 #include "core/crispy-config-loader.h"
 #include "core/crispy-scaffolder-private.h"

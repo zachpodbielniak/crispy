@@ -15,7 +15,9 @@
  * Follows the same pattern as gst's gst-config-compiler.c.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-config-loader.h"
 #include "crispy-source-utils-private.h"
 #include "crispy-config-context.h"

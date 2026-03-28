@@ -1,6 +1,8 @@
 /* crispy-plugin-engine.c - Plugin engine implementation */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-plugin-engine.h"
 #include "crispy-plugin-engine-private.h"
 #include "../crispy-plugin.h"

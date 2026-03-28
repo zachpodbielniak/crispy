@@ -5,7 +5,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-pkg-config-resolver.h"
 #include "crispy-dependency-info.h"
 #include "../interfaces/crispy-dependency-resolver.h"

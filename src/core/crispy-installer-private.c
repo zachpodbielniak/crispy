@@ -13,7 +13,9 @@
  * so the original is never modified.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-installer-private.h"
 #include "crispy-source-utils-private.h"
 #include "../interfaces/crispy-compiler.h"

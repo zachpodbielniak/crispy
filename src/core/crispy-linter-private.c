@@ -14,7 +14,9 @@
  * regardless of how glib was installed.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-linter-private.h"
 #include "../crispy-types.h"
 #include <glib.h>

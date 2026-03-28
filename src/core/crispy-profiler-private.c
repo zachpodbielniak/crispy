@@ -12,7 +12,9 @@
  * the gmon.out file after analysis.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-profiler-private.h"
 #include "../crispy-types.h"
 #include <glib.h>

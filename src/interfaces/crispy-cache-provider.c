@@ -1,6 +1,8 @@
 /* crispy-cache-provider.c - CrispyCacheProvider GInterface implementation */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-cache-provider.h"
 
 /**

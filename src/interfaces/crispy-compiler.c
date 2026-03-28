@@ -1,6 +1,8 @@
 /* crispy-compiler.c - CrispyCompiler GInterface implementation */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-compiler.h"
 #include "../crispy-types.h"
 

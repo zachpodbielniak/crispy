@@ -1,6 +1,8 @@
 /* crispy-dependency-resolver.c - CrispyDependencyResolver GInterface implementation */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-dependency-resolver.h"
 #include "../crispy-types.h"
 

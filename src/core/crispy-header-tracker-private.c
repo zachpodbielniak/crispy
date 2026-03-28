@@ -9,7 +9,9 @@
  * of those headers have changed so the cache can be invalidated.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-header-tracker-private.h"
 #include <glib.h>
 #include <glib/gstdio.h>

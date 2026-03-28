@@ -10,7 +10,9 @@
  * by the config init function, and read back to apply settings.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-config-context.h"
 #include "../crispy-types.h"
 

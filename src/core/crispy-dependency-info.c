@@ -10,7 +10,9 @@
  * allocation and g_strdup/g_free for all string fields.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-dependency-info.h"
 
 #include <glib.h>

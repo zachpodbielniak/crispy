@@ -13,7 +13,9 @@
  * into a single recompile trigger.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-watcher.h"
 #include "crispy-script.h"
 #include "../interfaces/crispy-compiler.h"

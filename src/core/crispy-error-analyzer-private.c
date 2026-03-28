@@ -9,7 +9,9 @@
  * pkg-config package names using a static lookup table.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-error-analyzer-private.h"
 #include <glib.h>
 #include <glib/gstdio.h>

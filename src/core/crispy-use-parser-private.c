@@ -10,7 +10,9 @@
  * crispy-source-utils-private.c which handles CRISPY_PARAMS extraction.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-use-parser-private.h"
 #include "crispy-dependency-info.h"
 #include "../interfaces/crispy-dependency-resolver.h"

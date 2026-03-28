@@ -7,7 +7,9 @@
  * the original argument list from that collapsed string.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-shebang-parser-private.h"
 #include <glib.h>
 #include <string.h>

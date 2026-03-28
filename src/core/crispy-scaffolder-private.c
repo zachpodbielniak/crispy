@@ -10,7 +10,9 @@
  * immediately without hand-writing the scaffolding themselves.
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-scaffolder-private.h"
 #include "../crispy-types.h"
 #include <glib.h>

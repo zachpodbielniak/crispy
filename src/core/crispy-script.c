@@ -1,6 +1,8 @@
 /* crispy-script.c - Script lifecycle orchestrator */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-script.h"
 #include "crispy-source-utils-private.h"
 #include "crispy-plugin-engine.h"

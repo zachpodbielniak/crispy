@@ -22,7 +22,9 @@
  *   - function/struct/typedef/enum preamble accumulation
  */
 
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
+#endif
 #include "crispy-repl.h"
 #include "crispy-script.h"
 #include "../interfaces/crispy-compiler.h"
