@@ -63,7 +63,7 @@ examples/
     plugin-source-guard.c           # Example: rejects dangerous function calls
     Makefile                        # Builds example plugins
 docs/
-  scripting.md, architecture.md, api.md, plugins.md
+  scripting.org, architecture.org, api.org, plugins.org
 ```
 
 ## Architecture
@@ -189,8 +189,8 @@ Tests that compile C code at runtime (test-gcc-compiler, test-script) require gc
 
 ## Documentation
 
-Docs live in `docs/` as markdown. Keep them in sync with code changes:
+Docs live in `docs/` as Org-mode. Keep them in sync with code changes:
 
-- `docs/scripting.md` -- user-facing script authoring guide
-- `docs/architecture.md` -- library design, interfaces, extension points
-- `docs/api.md` -- complete API reference for all public types and functions
+- `docs/scripting.org` -- user-facing script authoring guide
+- `docs/architecture.org` -- library design, interfaces, extension points
+- `docs/api.org` -- complete API reference for all public types and functions
