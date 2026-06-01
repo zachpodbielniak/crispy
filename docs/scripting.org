@@ -1,0 +1,379 @@
+* Crispy Script Authoring Guide
+:PROPERTIES:
+:CUSTOM_ID: crispy-script-authoring-guide
+:END:
+** What is Crispy?
+:PROPERTIES:
+:CUSTOM_ID: what-is-crispy
+:END:
+Crispy (Crispy Really Is Super Powerful Yo) is a GLib-native C scripting tool. It compiles C source files to shared objects on-the-fly, caches them by content hash, and loads/executes them via GModule. Scripts link against glib-2.0, gobject-2.0, gio-2.0, and gmodule-2.0 by default -- no extra configuration needed.
+
+The result is that you can write and execute C programs as if they were scripts, with instant startup on subsequent runs thanks to caching.
+
+** Script Format
+:PROPERTIES:
+:CUSTOM_ID: script-format
+:END:
+A crispy script is a standard C source file with an optional shebang and optional =CRISPY_PARAMS=:
+
+#+begin_src C
+#!/usr/bin/crispy
+#define CRISPY_PARAMS "`pkg-config --cflags --libs libsoup-3.0`"
+
+#include <glib.h>
+#include <gio/gio.h>
+
+gint
+main(
+    gint    argc,
+    gchar **argv
+){
+    g_print("Hello from crispy!\n");
+    return 0;
+}
+#+end_src
+
+*** Shebang
+:PROPERTIES:
+:CUSTOM_ID: shebang
+:END:
+The =#!/usr/bin/crispy= line is optional. When present, it allows the script to be executed directly:
+
+#+begin_src sh
+chmod +x script.c
+./script.c
+#+end_src
+
+Crispy automatically strips the shebang line before compilation so gcc does not see it.
+
+*** CRISPY_PARAMS
+:PROPERTIES:
+:CUSTOM_ID: crispy_params
+:END:
+The =#define CRISPY_PARAMS "..."= line specifies additional compiler flags. The value is shell-expanded, so backticks and =$()= work:
+
+#+begin_src C
+/* link against libmath */
+#define CRISPY_PARAMS "-lm"
+
+/* use pkg-config for a library */
+#define CRISPY_PARAMS "`pkg-config --cflags --libs libsoup-3.0`"
+
+/* multiple flags */
+#define CRISPY_PARAMS "-lm `pkg-config --cflags --libs json-glib-1.0`"
+#+end_src
+
+The CRISPY_PARAMS line is extracted and removed from the source before compilation. The expanded value becomes part of the cache key, so different pkg-config outputs (e.g., on different systems) produce separate cached binaries.
+
+*** main() Signature
+:PROPERTIES:
+:CUSTOM_ID: main-signature
+:END:
+Scripts must define a =main()= function with the standard C signature:
+
+#+begin_src C
+gint
+main(
+    gint    argc,
+    gchar **argv
+){
+    /* your code here */
+    return 0;
+}
+#+end_src
+
+The return value propagates as the script's exit code.
+
+** Default Available Libraries
+:PROPERTIES:
+:CUSTOM_ID: default-available-libraries
+:END:
+Every crispy script links against these libraries automatically:
+
+| Library     | Provides                                                            |
+|-------------+---------------------------------------------------------------------|
+| glib-2.0    | Core utilities, data structures, string handling, memory management |
+| gobject-2.0 | GObject type system, signals, properties                            |
+| gio-2.0     | File I/O, networking, D-Bus, settings                               |
+| gmodule-2.0 | Dynamic module loading                                              |
+
+You can =#include= any header from these libraries without additional configuration:
+
+#+begin_src C
+#include <glib.h>
+#include <glib-object.h>
+#include <gio/gio.h>
+#include <gmodule.h>
+#+end_src
+
+** Adding Extra Dependencies
+:PROPERTIES:
+:CUSTOM_ID: adding-extra-dependencies
+:END:
+Use =CRISPY_PARAMS= with =pkg-config= to add libraries:
+
+#+begin_src C
+/* JSON parsing */
+#define CRISPY_PARAMS "`pkg-config --cflags --libs json-glib-1.0`"
+#include <json-glib/json-glib.h>
+
+/* HTTP client */
+#define CRISPY_PARAMS "`pkg-config --cflags --libs libsoup-3.0`"
+#include <libsoup/soup.h>
+
+/* Math library (no pkg-config needed) */
+#define CRISPY_PARAMS "-lm"
+#include <math.h>
+
+/* GTK GUI */
+#define CRISPY_PARAMS "`pkg-config --cflags --libs gtk4`"
+#include <gtk/gtk.h>
+#+end_src
+
+** Execution Modes
+:PROPERTIES:
+:CUSTOM_ID: execution-modes
+:END:
+*** File Mode
+:PROPERTIES:
+:CUSTOM_ID: file-mode
+:END:
+The most common mode. Pass a =.c= file path:
+
+#+begin_src sh
+crispy script.c
+crispy script.c arg1 arg2
+#+end_src
+
+*** Inline Mode (-i)
+:PROPERTIES:
+:CUSTOM_ID: inline-mode--i
+:END:
+Execute a C expression directly. The code is wrapped in a =main()= function with default GLib includes:
+
+#+begin_src sh
+crispy -i 'g_print("hello\n"); return 0;'
+#+end_src
+
+Add extra includes with =-I= (semicolon-separated):
+
+#+begin_src sh
+crispy -I "math.h;stdlib.h" -i 'g_print("%f\n", sqrt(2.0)); return 0;'
+#+end_src
+
+Note: inline mode does not support =CRISPY_PARAMS=.
+
+*** Stdin Mode (-)
+:PROPERTIES:
+:CUSTOM_ID: stdin-mode--
+:END:
+Read full source from stdin:
+
+#+begin_src sh
+cat <<'EOF' | crispy -
+#include <glib.h>
+gint main(gint argc, gchar **argv){
+    g_print("from stdin!\n");
+    return 0;
+}
+EOF
+#+end_src
+
+Or pipe from another command:
+
+#+begin_src sh
+echo '#include <glib.h>
+gint main(gint argc, gchar **argv){ return 42; }' | crispy -
+echo $?  # prints 42
+#+end_src
+
+*** Shebang Mode
+:PROPERTIES:
+:CUSTOM_ID: shebang-mode
+:END:
+Make the script executable:
+
+#+begin_src sh
+chmod +x script.c
+./script.c arg1 arg2
+#+end_src
+
+The kernel invokes =crispy script.c arg1 arg2= via the shebang.
+
+** Argument Passing
+:PROPERTIES:
+:CUSTOM_ID: argument-passing
+:END:
+Arguments after the script path are passed to the script's =main()=:
+
+#+begin_src sh
+crispy script.c hello world
+# In script: argc=3, argv={"script.c", "hello", "world"}
+#+end_src
+
+For inline mode, all remaining arguments are passed:
+
+#+begin_src sh
+crispy -i 'g_print("arg1=%s\n", argv[1]); return 0;' hello
+#+end_src
+
+** Caching
+:PROPERTIES:
+:CUSTOM_ID: caching
+:END:
+Crispy caches compiled shared objects in =~/.cache/crispy/=. The cache key is a SHA256 hash of:
+
+1. The full source content
+2. The expanded CRISPY_PARAMS value
+3. The compiler version string
+
+*** Cache Behavior
+:PROPERTIES:
+:CUSTOM_ID: cache-behavior
+:END:
+- *First run*: Source is compiled to a =.so= and cached. This takes a moment.
+- *Subsequent runs*: If the cache entry exists and the source hasn't changed, the cached =.so= is loaded directly. Startup is nearly instant.
+- *Source changes*: Any modification to the source, CRISPY_PARAMS, or compiler version invalidates the cache.
+
+*** Cache Management
+:PROPERTIES:
+:CUSTOM_ID: cache-management
+:END:
+#+begin_src sh
+# Force recompilation (skip cache)
+crispy -n script.c
+
+# Purge all cached artifacts
+crispy --clean-cache
+#+end_src
+
+** Debugging with GDB
+:PROPERTIES:
+:CUSTOM_ID: debugging-with-gdb
+:END:
+Use =--gdb= to compile the script as a standalone executable with debug symbols (=-g -O0=) and launch it under gdb:
+
+#+begin_src sh
+crispy --gdb script.c
+#+end_src
+
+This compiles the source to a temporary executable (not a .so) and runs =gdb --args <executable> <script_args>=.
+
+** Other Options
+:PROPERTIES:
+:CUSTOM_ID: other-options
+:END:
+#+begin_src sh
+# Keep temp source files (useful for debugging preprocessed source)
+crispy -S script.c
+
+# Show what would be compiled without running
+crispy --dry-run script.c
+
+# Preload a shared library before execution
+crispy -p libcustom.so script.c
+
+# Show version
+crispy -v
+
+# Show license
+crispy --license
+#+end_src
+
+** Performance Tips
+:PROPERTIES:
+:CUSTOM_ID: performance-tips
+:END:
+- *Warm runs are fast*: After the first compilation, cached scripts load in milliseconds via =g_module_open()=.
+- *Cold runs depend on gcc*: First compilation time depends on script complexity and linked libraries.
+- *Cache is per-system*: Different compiler versions or pkg-config outputs produce separate cache entries. This is intentional -- binaries are not portable across systems.
+- *Use =-n= sparingly*: Forcing recompilation on every run negates the caching benefit.
+
+** Common Patterns
+:PROPERTIES:
+:CUSTOM_ID: common-patterns
+:END:
+*** GLib Data Structures
+:PROPERTIES:
+:CUSTOM_ID: glib-data-structures
+:END:
+#+begin_src C
+#!/usr/bin/crispy
+#include <glib.h>
+
+gint
+main(
+    gint    argc,
+    gchar **argv
+){
+    g_autoptr(GHashTable) table = NULL;
+    g_autoptr(GPtrArray) array = NULL;
+    gint i;
+
+    /* hash table */
+    table = g_hash_table_new(g_str_hash, g_str_equal);
+    g_hash_table_insert(table, "key1", "value1");
+    g_hash_table_insert(table, "key2", "value2");
+    g_print("table size: %u\n", g_hash_table_size(table));
+
+    /* pointer array */
+    array = g_ptr_array_new();
+    for (i = 0; i < 5; i++)
+        g_ptr_array_add(array, g_strdup_printf("item-%d", i));
+    g_print("array length: %u\n", array->len);
+
+    return 0;
+}
+#+end_src
+
+*** GIO File Operations
+:PROPERTIES:
+:CUSTOM_ID: gio-file-operations
+:END:
+#+begin_src C
+#!/usr/bin/crispy
+#include <glib.h>
+#include <gio/gio.h>
+
+gint
+main(
+    gint    argc,
+    gchar **argv
+){
+    g_autoptr(GFile) file = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autofree gchar *contents = NULL;
+    gsize length;
+
+    if (argc < 2)
+    {
+        g_printerr("Usage: %s <file>\n", argv[0]);
+        return 1;
+    }
+
+    file = g_file_new_for_path(argv[1]);
+    if (!g_file_load_contents(file, NULL, &contents, &length, NULL, &error))
+    {
+        g_printerr("Error: %s\n", error->message);
+        return 1;
+    }
+    g_print("%s", contents);
+
+    return 0;
+}
+#+end_src
+
+*** Using g_autoptr
+:PROPERTIES:
+:CUSTOM_ID: using-g_autoptr
+:END:
+Crispy scripts fully support GLib's =g_autoptr()= for automatic resource management:
+
+#+begin_src C
+g_autoptr(GError) error = NULL;       /* auto g_error_free */
+g_autoptr(GHashTable) table = NULL;   /* auto g_hash_table_unref */
+g_autoptr(GFile) file = NULL;         /* auto g_object_unref */
+g_autofree gchar *str = NULL;         /* auto g_free */
+#+end_src
+
+This prevents resource leaks and makes scripts cleaner.

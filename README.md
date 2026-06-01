@@ -172,9 +172,9 @@ make test
 
 ## Documentation
 
-- [Script Authoring Guide](docs/scripting.md) -- how to write and run crispy scripts
-- [Architecture](docs/architecture.md) -- library design, interfaces, extension points
-- [API Reference](docs/api.md) -- complete API for all types, interfaces, and functions
+- [Script Authoring Guide](docs/scripting.org) -- how to write and run crispy scripts
+- [Architecture](docs/architecture.org) -- library design, interfaces, extension points
+- [API Reference](docs/api.org) -- complete API for all types, interfaces, and functions
 
 ## Caching
 
