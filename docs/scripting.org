@@ -131,10 +131,31 @@ crispy -I "math.h;stdlib.h" -i 'g_print("%f\n", sqrt(2.0)); return 0;'
 Note: inline mode does not support =CRISPY_PARAMS=.
 
 *** Stdin Mode (-)
-Read full source from stdin:
+When input is piped, Crispy reads the script from stdin. The explicit
+=-= argument is optional -- a bare =crispy= with piped input reads
+stdin automatically (it is only treated as stdin when stdin is not a
+terminal, so an interactive =crispy= with no arguments still prints the
+usage error).
+
+Stdin accepts two forms, auto-detected by whether the input defines a
+=main= function:
+
+1. A *full source file* (defines =main=) is compiled as-is, exactly
+   like a =.c= file -- it must supply its own =#include= directives.
+2. A *bare statement fragment* (no =main=) is wrapped in =main()= with
+   the default GLib includes, exactly like =-i= inline mode.
+
+Bare fragment (wrapped automatically):
 
 #+begin_src sh
-cat <<'EOF' | crispy -
+echo 'g_print("test\n");' | crispy       # prints: test
+echo 'return 7;' | crispy; echo $?       # prints: 7
+#+end_src
+
+Full source from stdin:
+
+#+begin_src sh
+cat <<'EOF' | crispy
 #include <glib.h>
 gint main(gint argc, gchar **argv){
     g_print("from stdin!\n");
@@ -143,7 +164,8 @@ gint main(gint argc, gchar **argv){
 EOF
 #+end_src
 
-Or pipe from another command:
+The explicit =-= form still works and behaves identically; use it when
+you want to pass arguments to the script (=crispy - arg1 arg2=):
 
 #+begin_src sh
 echo '#include <glib.h>

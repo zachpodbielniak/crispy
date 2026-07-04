@@ -768,7 +768,8 @@ main(
             "  crispy script.c -f blah        (script sees -f blah)\n"
             "  crispy -n script.c             (crispy gets -n, script sees no args)\n"
             "  crispy -i 'g_print(\"hello\\n\"); return 0;'\n"
-            "  echo 'g_print(\"hello\\n\"); return 0;' | crispy -\n"
+            "  echo 'g_print(\"hello\\n\");' | crispy         (bare code, piped)\n"
+            "  echo 'g_print(\"hello\\n\");' | crispy -       (explicit stdin)\n"
             "  crispy --gdb script.c\n"
             "  crispy --watch script.c\n"
             "  chmod +x script.c && ./script.c  (with #!/usr/bin/crispy shebang)",
@@ -1081,6 +1082,15 @@ main(
     /* determine mode and create script */
     is_stdin = (script_argc > 0 && strcmp(script_argv[0], "-") == 0);
 
+    /*
+     * Implicit stdin: no inline code, no script file given, and stdin
+     * is not a terminal (input is piped or redirected). This lets
+     * `echo '...' | crispy` work without an explicit "-" argument.
+     */
+    if (!is_stdin && opt_inline == NULL && script_argc == 0 &&
+        !isatty(STDIN_FILENO))
+        is_stdin = TRUE;
+
     if (opt_inline != NULL)
     {
         /* inline mode: -i "code" */
@@ -1094,15 +1104,18 @@ main(
     }
     else if (is_stdin)
     {
-        /* stdin mode: crispy - [args...] */
+        /* stdin mode: crispy - [args...] or implicit piped stdin */
         script = crispy_script_new_from_stdin(
             CRISPY_COMPILER(compiler),
             CRISPY_CACHE_PROVIDER(cache),
             flags, &error);
 
-        /* skip the "-" itself, pass remaining to script */
-        script_argv++;
-        script_argc--;
+        /* skip an explicit "-" if present; pass remaining to script */
+        if (script_argc > 0 && strcmp(script_argv[0], "-") == 0)
+        {
+            script_argv++;
+            script_argc--;
+        }
     }
     else
     {

@@ -190,6 +190,55 @@ build_inline_source(
     return g_string_free(src, FALSE);
 }
 
+/*
+ * source_defines_main:
+ * @source: source text to inspect
+ *
+ * Heuristically determines whether @source is a complete translation
+ * unit by scanning for a standalone `main` identifier immediately
+ * followed by an opening parenthesis (allowing whitespace). This lets
+ * stdin mode distinguish a full source file (with its own main) from a
+ * bare statement fragment that should be wrapped in main() like inline
+ * mode.
+ *
+ * Returns: %TRUE if @source appears to define a main() function
+ */
+static gboolean
+source_defines_main(
+    const gchar *source
+){
+    const gchar *p;
+
+    p = source;
+    while ((p = strstr(p, "main")) != NULL)
+    {
+        const gchar *after;
+        gboolean word_start;
+
+        /* require a word boundary before "main" so we don't match
+         * substrings like "domain" or "remaining" */
+        word_start = (p == source) ||
+                     (!g_ascii_isalnum(*(p - 1)) && *(p - 1) != '_');
+
+        after = p + 4; /* strlen("main") */
+
+        if (word_start)
+        {
+            const gchar *q;
+
+            q = after;
+            while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r')
+                q++;
+            if (*q == '(')
+                return TRUE;
+        }
+
+        p = after;
+    }
+
+    return FALSE;
+}
+
 /* --- GObject lifecycle --- */
 
 static void
@@ -331,6 +380,7 @@ crispy_script_new_from_stdin(
     CrispyScript *self;
     CrispyScriptPrivate *priv;
     GString *buf;
+    gchar *raw;
     gchar tmp[4096];
 
     g_return_val_if_fail(CRISPY_IS_COMPILER(compiler), NULL);
@@ -351,11 +401,25 @@ crispy_script_new_from_stdin(
     priv->flags = flags;
     priv->source_path = NULL;
 
-    priv->source_content = g_string_free(buf, FALSE);
-    priv->source_len = strlen(priv->source_content);
+    raw = g_string_free(buf, FALSE);
 
-    /* parse CRISPY_PARAMS and strip shebang from stdin source too */
-    parse_crispy_params(priv);
+    if (source_defines_main(raw))
+    {
+        /* full source file: use as-is, parse CRISPY_PARAMS/shebang */
+        priv->source_content = raw;
+        priv->source_len = strlen(priv->source_content);
+        parse_crispy_params(priv);
+    }
+    else
+    {
+        /* bare statement fragment: wrap in main() like inline mode so
+         * `echo 'g_print("hi\n");' | crispy` just works */
+        priv->source_content = build_inline_source(raw, NULL);
+        priv->source_len = strlen(priv->source_content);
+        priv->modified_source = g_strdup(priv->source_content);
+        priv->modified_len = priv->source_len;
+        g_free(raw);
+    }
 
     return self;
 }
