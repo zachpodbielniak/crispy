@@ -1,7 +1,13 @@
 * Plugin Authoring Guide
+:PROPERTIES:
+:CUSTOM_ID: plugin-authoring-guide
+:END:
 Crispy supports a plugin system that lets you extend the script execution pipeline without modifying crispy itself. Plugins are shared libraries (=.so= files) loaded at runtime via GModule.
 
 ** Quick Start
+:PROPERTIES:
+:CUSTOM_ID: quick-start
+:END:
 #+begin_src C
 /* my-plugin.c */
 #define CRISPY_COMPILATION
@@ -35,7 +41,13 @@ crispy -P plugin1.so,plugin2.so script.c    # comma-separated
 #+end_src
 
 ** Plugin Contract
+:PROPERTIES:
+:CUSTOM_ID: plugin-contract
+:END:
 *** Mandatory: Plugin Info
+:PROPERTIES:
+:CUSTOM_ID: mandatory-plugin-info
+:END:
 Every plugin *must* export a =CrispyPluginInfo= struct named =crispy_plugin_info=. Use the =CRISPY_PLUGIN_DEFINE()= macro:
 
 #+begin_src C
@@ -43,6 +55,9 @@ CRISPY_PLUGIN_DEFINE(name, description, version, author, license);
 #+end_src
 
 *** Optional: Lifecycle Functions
+:PROPERTIES:
+:CUSTOM_ID: optional-lifecycle-functions
+:END:
 #+begin_src C
 /* Called once when plugin is loaded. Return value stored as plugin_data. */
 gpointer crispy_plugin_init(void);
@@ -52,6 +67,9 @@ void crispy_plugin_shutdown(gpointer plugin_data);
 #+end_src
 
 *** Optional: Hook Functions
+:PROPERTIES:
+:CUSTOM_ID: optional-hook-functions
+:END:
 Export any combination of these functions to hook into the pipeline:
 
 | Function                           | Hook Point      | When                                         |
@@ -73,9 +91,15 @@ CrispyHookResult crispy_plugin_on_<hook_name>(CrispyHookContext *ctx);
 #+end_src
 
 ** Hook Context
+:PROPERTIES:
+:CUSTOM_ID: hook-context
+:END:
 The =CrispyHookContext= struct is passed to every hook. It contains read-only pipeline state and mutable fields.
 
 *** Read-Only Fields
+:PROPERTIES:
+:CUSTOM_ID: read-only-fields
+:END:
 | Field              | Type              | Description                                  |
 |--------------------+-------------------+----------------------------------------------|
 | =hook_point=       | =CrispyHookPoint= | Which hook is firing                         |
@@ -92,6 +116,9 @@ The =CrispyHookContext= struct is passed to every hook. It contains read-only pi
 | =cache_hit=        | =gboolean=        | Whether cache had a valid entry              |
 
 *** Mutable Fields
+:PROPERTIES:
+:CUSTOM_ID: mutable-fields
+:END:
 | Field             | Type       | Description                                        |
 |-------------------+------------+----------------------------------------------------|
 | =modified_source= | =gchar*=   | Plugin-modified source (set at SOURCE_LOADED)      |
@@ -102,6 +129,9 @@ The =CrispyHookContext= struct is passed to every hook. It contains read-only pi
 | =force_recompile= | =gboolean= | Force recompilation (set at CACHE_CHECKED)         |
 
 *** Timing Fields (microseconds)
+:PROPERTIES:
+:CUSTOM_ID: timing-fields-microseconds
+:END:
 | Field               | Description                        |
 |---------------------+------------------------------------|
 | =time_param_expand= | Time spent expanding CRISPY_PARAMS |
@@ -113,6 +143,9 @@ The =CrispyHookContext= struct is passed to every hook. It contains read-only pi
 | =time_total=        | Total elapsed time                 |
 
 *** Access Fields
+:PROPERTIES:
+:CUSTOM_ID: access-fields
+:END:
 | Field         | Type       | Description                                   |
 |---------------+------------+-----------------------------------------------|
 | =plugin_data= | =gpointer= | Per-plugin state from init()                  |
@@ -121,6 +154,9 @@ The =CrispyHookContext= struct is passed to every hook. It contains read-only pi
 | =exit_code=   | =gint=     | Script exit code (available at POST_EXECUTE)  |
 
 ** Hook Results
+:PROPERTIES:
+:CUSTOM_ID: hook-results
+:END:
 | Result                        | Value | Meaning                                     |
 |-------------------------------+-------+---------------------------------------------|
 | =CRISPY_HOOK_CONTINUE=        | 0     | Proceed normally                            |
@@ -128,6 +164,9 @@ The =CrispyHookContext= struct is passed to every hook. It contains read-only pi
 | =CRISPY_HOOK_FORCE_RECOMPILE= | 2     | Force recompilation (only at CACHE_CHECKED) |
 
 ** Inter-Plugin Communication
+:PROPERTIES:
+:CUSTOM_ID: inter-plugin-communication
+:END:
 Plugins can share data via the engine's data store:
 
 #+begin_src C
@@ -141,30 +180,57 @@ gpointer data = crispy_plugin_engine_get_data(engine, "my-key");
 #+end_src
 
 ** Plugin Execution Order
+:PROPERTIES:
+:CUSTOM_ID: plugin-execution-order
+:END:
 - Plugins are called in the order they were loaded (left-to-right in the =-P= argument)
 - If a plugin returns =CRISPY_HOOK_ABORT=, subsequent plugins are *not* called
 - Each plugin's =plugin_data= is swapped in before its hook is called
 
 ** Use Cases
+:PROPERTIES:
+:CUSTOM_ID: use-cases
+:END:
 *** Performance Monitoring
+:PROPERTIES:
+:CUSTOM_ID: performance-monitoring
+:END:
 Hook =POST_EXECUTE= to report timing data (see =examples/plugins/plugin-timing.c=).
 
 *** Security Scanning
+:PROPERTIES:
+:CUSTOM_ID: security-scanning
+:END:
 Hook =SOURCE_LOADED= to scan source for dangerous patterns (see =examples/plugins/plugin-source-guard.c=).
 
 *** Source Transformation
+:PROPERTIES:
+:CUSTOM_ID: source-transformation
+:END:
 Hook =SOURCE_LOADED= to modify =ctx->modified_source= before compilation. For example, inject instrumentation code or macro expansions.
 
 *** Compiler Flag Injection
+:PROPERTIES:
+:CUSTOM_ID: compiler-flag-injection
+:END:
 Hook =PRE_COMPILE= to set =ctx->extra_flags= with additional compiler flags (e.g., =-DDEBUG=, =-fsanitize=address=).
 
 *** Cache Control
+:PROPERTIES:
+:CUSTOM_ID: cache-control
+:END:
 Hook =CACHE_CHECKED= and return =CRISPY_HOOK_FORCE_RECOMPILE= or set =ctx->force_recompile = TRUE= to bypass the cache.
 
 *** Argument Manipulation
+:PROPERTIES:
+:CUSTOM_ID: argument-manipulation
+:END:
 Hook =PRE_EXECUTE= to modify =ctx->argc= and =ctx->argv= before the script's main() is called.
 
 ** Example Plugins
+:PROPERTIES:
+:CUSTOM_ID: example-plugins
+:END:
 | Plugin                                   | Description                                    |
 |------------------------------------------+------------------------------------------------|
 | =examples/plugins/plugin-timing.c=       | Prints per-phase timing report to stderr       |

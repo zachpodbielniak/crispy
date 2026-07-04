@@ -1157,6 +1157,8 @@ handle_meta_command(
         g_print("      crispy> for (int i = 0; i < 3; i++) {\n");
         g_print("        ...>    g_print(\"%%d\\n\", i);\n");
         g_print("        ...>  }\n");
+        g_print("    A blank line evaluates pending multi-line input\n");
+        g_print("    (useful when a typo leaves the input unbalanced).\n");
         g_print("\n");
         return TRUE;
     }
@@ -1360,11 +1362,26 @@ crispy_repl_start(
             break;
         }
 
-        /* skip empty lines unless in multiline mode */
-        if (line[0] == '\0' && depth == 0)
+        /*
+         * Skip empty lines at top level.  In multiline mode a blank
+         * line forces evaluation of the accumulated input instead
+         * (Python-style): a typo that unbalances the depth tracker
+         * (e.g. an unclosed paren hidden inside a string literal)
+         * would otherwise trap the REPL in continuation mode forever.
+         * Forcing the eval lets gcc report the real error and returns
+         * to a fresh prompt.
+         */
+        if (line[0] == '\0')
         {
-            free(line);
-            continue;
+            if (depth == 0)
+            {
+                free(line);
+                continue;
+            }
+
+            /* fall through: append the blank line (a no-op for the
+             * depth) and let the depth <= 0 path below evaluate */
+            depth = 0;
         }
 
         /* exit commands */

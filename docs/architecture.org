@@ -1,5 +1,11 @@
 * Crispy Architecture
+:PROPERTIES:
+:CUSTOM_ID: crispy-architecture
+:END:
 ** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
 Crispy is structured as a GObject library (=libcrispy=) with a thin CLI frontend. The library is built around two GInterfaces that define the compilation and caching contracts, making it easy to extend with custom backends.
 
 #+begin_example
@@ -46,10 +52,19 @@ Crispy is structured as a GObject library (=libcrispy=) with a thin CLI frontend
 #+end_example
 
 ** Type Hierarchy
+:PROPERTIES:
+:CUSTOM_ID: type-hierarchy
+:END:
 *** Interfaces
+:PROPERTIES:
+:CUSTOM_ID: interfaces
+:END:
 Interfaces define contracts that concrete types implement. They are the primary extension points.
 
 **** CrispyCompiler
+:PROPERTIES:
+:CUSTOM_ID: crispycompiler
+:END:
 Defined in =src/interfaces/crispy-compiler.h=.
 
 The compilation contract. Any type implementing this interface can serve as a compilation backend.
@@ -112,6 +127,9 @@ script = crispy_script_new_from_file(path,
 #+end_src
 
 **** CrispyCacheProvider
+:PROPERTIES:
+:CUSTOM_ID: crispycacheprovider
+:END:
 Defined in =src/interfaces/crispy-cache-provider.h=.
 
 The caching contract. Any type implementing this interface can serve as a cache backend.
@@ -137,7 +155,13 @@ G_DECLARE_FINAL_TYPE(CrispyMemoryCache, crispy_memory_cache,
 Or a network-shared cache using a key-value store. The interface makes no assumptions about the storage mechanism -- only that it can hash, store, check, and purge.
 
 *** Concrete Types
+:PROPERTIES:
+:CUSTOM_ID: concrete-types
+:END:
 **** CrispyGccCompiler
+:PROPERTIES:
+:CUSTOM_ID: crispygcccompiler
+:END:
 Defined in =src/core/crispy-gcc-compiler.h/.c=. Implements =CrispyCompiler=.
 
 On construction, probes the system for:
@@ -153,6 +177,9 @@ Compilation commands:
 All process spawning uses =g_spawn_command_line_sync()=. Compilation errors include gcc's stderr in the GError message.
 
 **** CrispyFileCache
+:PROPERTIES:
+:CUSTOM_ID: crispyfilecache
+:END:
 Defined in =src/core/crispy-file-cache.h/.c=. Implements =CrispyCacheProvider=.
 
 - Cache directory: =~/.cache/crispy/= (via =g_get_user_cache_dir()=)
@@ -163,6 +190,9 @@ Defined in =src/core/crispy-file-cache.h/.c=. Implements =CrispyCacheProvider=.
 - Purge: iterates directory, removes all =*.so= files
 
 **** CrispyPluginEngine
+:PROPERTIES:
+:CUSTOM_ID: crispypluginengine
+:END:
 Defined in =src/core/crispy-plugin-engine.h/.c=. Final type -- not an interface.
 
 Manages the lifecycle of Crispy plugins. Plugins are =.so= files loaded via GModule that export well-known C symbols. The engine resolves these symbols at load time and dispatches hook calls during script execution.
@@ -186,9 +216,12 @@ Manages the lifecycle of Crispy plugins. Plugins are =.so= files loaded via GMod
 | =crispy_plugin_engine_set_data()=         | Store data in shared store             |
 | =crispy_plugin_engine_get_data()=         | Retrieve data from shared store        |
 
-See [[file:plugins.org][docs/plugins.org]] for plugin authoring guide.
+See [[file:plugins.org][docs/plugins.md]] for plugin authoring guide.
 
 **** CrispyScript
+:PROPERTIES:
+:CUSTOM_ID: crispyscript
+:END:
 Defined in =src/core/crispy-script.h/.c=. Final type -- not an interface.
 
 The orchestrator that ties everything together. It takes a =CrispyCompiler= and =CrispyCacheProvider= via its constructors, making it fully decoupled from specific implementations.
@@ -204,6 +237,9 @@ The orchestrator that ties everything together. It takes a =CrispyCompiler= and 
 See the Execution Pipeline section below.
 
 ** Execution Pipeline
+:PROPERTIES:
+:CUSTOM_ID: execution-pipeline
+:END:
 #+begin_example
 Source (file / -i / stdin)
   │
@@ -275,9 +311,15 @@ Exit with script's return code
 When plugins are loaded via =--plugins=/=-P=, each hook dispatches to all loaded plugins in order. If any plugin returns =CRISPY_HOOK_ABORT=, the pipeline stops immediately. All timing data is accumulated and available to post-execute hooks.
 
 ** Configuration System
+:PROPERTIES:
+:CUSTOM_ID: configuration-system
+:END:
 Crispy supports a C-based configuration file that is compiled and loaded using crispy's own compilation and caching infrastructure. The config system operates independently of =CrispyScript= -- it does not trigger plugin hooks during its own compilation.
 
 *** Components
+:PROPERTIES:
+:CUSTOM_ID: components
+:END:
 | Component             | File                                        | Description                                        |
 |-----------------------+---------------------------------------------+----------------------------------------------------|
 | =CrispyConfigContext= | =src/core/crispy-config-context.h/.c=       | Plain struct (not GObject) with setter/getter API  |
@@ -285,6 +327,9 @@ Crispy supports a C-based configuration file that is compiled and loaded using c
 | Source Utilities      | =src/core/crispy-source-utils-private.h/.c= | Shared: CRISPY_PARAMS extraction, shell expansion  |
 
 *** Design Decisions
+:PROPERTIES:
+:CUSTOM_ID: design-decisions
+:END:
 - *Plain struct, not GObject* -- =CrispyConfigContext= is short-lived (stack-allocated in main.c), needs no signals/properties, follows the =CrispyHookContext= pattern.
 - *Direct interface usage* -- The config loader uses =CrispyCompiler= and =CrispyCacheProvider= interfaces directly, not =CrispyScript=, since config files have a =crispy_config_init()= entry point (not =main()=) and should not trigger plugin hooks.
 - *Config loads before plugins* -- The config can specify which plugins to load, so it must run first.
@@ -293,6 +338,9 @@ Crispy supports a C-based configuration file that is compiled and loaded using c
 - *Opaque struct* -- The struct definition is only visible to internal code (=CRISPY_COMPILATION=); config authors use the setter/getter API.
 
 *** Compiler Flag Hierarchy
+:PROPERTIES:
+:CUSTOM_ID: compiler-flag-hierarchy
+:END:
 #+begin_example
 ┌─────────────────────────────────────────────────────────────┐
 │               Final gcc command line (left to right)        │
@@ -309,15 +357,21 @@ Crispy supports a C-based configuration file that is compiled and loaded using c
 #+end_example
 
 *** Config Search Path
+:PROPERTIES:
+:CUSTOM_ID: config-search-path
+:END:
 1. =$CRISPY_CONFIG_FILE= environment variable
 2. =-c=/=--config PATH= CLI argument
 3. =~/.config/crispy/config.c=
 4. =/etc/crispy/config.c= (=CRISPY_SYSCONFDIR=)
 5. =/usr/share/crispy/config.c= (=CRISPY_DATADIR=)
 
-See [[file:config.org][docs/config.org]] for the full user-facing configuration guide.
+See [[file:config.org][docs/config.md]] for the full user-facing configuration guide.
 
 ** Error Handling
+:PROPERTIES:
+:CUSTOM_ID: error-handling
+:END:
 All errors use the =CRISPY_ERROR= quark with specific error codes:
 
 | Code                         | Meaning                                             |
@@ -333,6 +387,9 @@ All errors use the =CRISPY_ERROR= quark with specific error codes:
 | =CRISPY_ERROR_CONFIG=        | Config file compilation or init failure             |
 
 ** Flags
+:PROPERTIES:
+:CUSTOM_ID: flags
+:END:
 =CrispyFlags= is a bitmask enum:
 
 | Flag                          | CLI         | Effect                                  |
@@ -343,11 +400,17 @@ All errors use the =CRISPY_ERROR= quark with specific error codes:
 | =CRISPY_FLAG_GDB=             | =--gdb=     | Compile as executable, launch under gdb |
 
 ** Thread Safety
+:PROPERTIES:
+:CUSTOM_ID: thread-safety
+:END:
 - =CrispyGccCompiler= and =CrispyFileCache= instances are safe to share across threads for read-only operations (get_version, get_base_flags, compute_hash, has_valid).
 - Compilation and purge operations should be serialized if multiple threads share the same instances.
 - =CrispyScript= instances should not be shared across threads. Create separate instances per thread.
 
 ** Building and Linking
+:PROPERTIES:
+:CUSTOM_ID: building-and-linking
+:END:
 To use libcrispy in your own project:
 
 #+begin_src sh

@@ -1,5 +1,11 @@
 * Crispy API Reference
+:PROPERTIES:
+:CUSTOM_ID: crispy-api-reference
+:END:
 ** Including
+:PROPERTIES:
+:CUSTOM_ID: including
+:END:
 All public API is accessible through the umbrella header:
 
 #+begin_src C
@@ -11,7 +17,13 @@ Individual headers cannot be included directly (they will error).
 --------------
 
 ** Enumerations
+:PROPERTIES:
+:CUSTOM_ID: enumerations
+:END:
 *** CrispyFlags
+:PROPERTIES:
+:CUSTOM_ID: crispyflags
+:END:
 #+begin_src C
 typedef enum
 {
@@ -34,6 +46,9 @@ Bitmask flags controlling script compilation and execution behavior.
 | =CRISPY_FLAG_GDB=             | Compile as executable with debug symbols, launch under gdb |
 
 *** CrispyError
+:PROPERTIES:
+:CUSTOM_ID: crispyerror
+:END:
 #+begin_src C
 typedef enum
 {
@@ -64,6 +79,9 @@ Error codes for the =CRISPY_ERROR= domain.
 | =CRISPY_ERROR_CONFIG=        | Config file compilation or init failure   |
 
 *** CrispyHookPoint
+:PROPERTIES:
+:CUSTOM_ID: crispyhookpoint
+:END:
 #+begin_src C
 typedef enum
 {
@@ -96,6 +114,9 @@ Hook points in the script execution pipeline.
 | =CRISPY_HOOK_POINT_COUNT=     | Total number of hook points (not a valid hook) |
 
 *** CrispyHookResult
+:PROPERTIES:
+:CUSTOM_ID: crispyhookresult
+:END:
 #+begin_src C
 typedef enum
 {
@@ -116,7 +137,13 @@ Return value from hook functions indicating how the pipeline should proceed.
 --------------
 
 ** Type Definitions
+:PROPERTIES:
+:CUSTOM_ID: type-definitions
+:END:
 *** CrispyMainFunc
+:PROPERTIES:
+:CUSTOM_ID: crispymainfunc
+:END:
 #+begin_src C
 typedef gint (*CrispyMainFunc)(gint argc, gchar **argv);
 #+end_src
@@ -124,6 +151,9 @@ typedef gint (*CrispyMainFunc)(gint argc, gchar **argv);
 Function pointer type for the script's =main()= entry point.
 
 *** CrispyPluginInfo
+:PROPERTIES:
+:CUSTOM_ID: crispyplugininfo
+:END:
 #+begin_src C
 typedef struct
 {
@@ -138,13 +168,19 @@ typedef struct
 Metadata descriptor that every plugin must export as the symbol =crispy_plugin_info=. Use =CRISPY_PLUGIN_DEFINE()= to generate it.
 
 *** CrispyHookContext
+:PROPERTIES:
+:CUSTOM_ID: crispyhookcontext
+:END:
 #+begin_src C
 typedef struct _CrispyHookContext CrispyHookContext;
 #+end_src
 
-Context structure passed to every hook function. Contains both read-only pipeline state and mutable fields that plugins can modify to alter execution behavior. See [[file:plugins.org][docs/plugins.org]] for full field reference.
+Context structure passed to every hook function. Contains both read-only pipeline state and mutable fields that plugins can modify to alter execution behavior. See [[file:plugins.org][docs/plugins.md]] for full field reference.
 
 *** CrispyPluginHookFunc
+:PROPERTIES:
+:CUSTOM_ID: crispypluginhookfunc
+:END:
 #+begin_src C
 typedef CrispyHookResult (*CrispyPluginHookFunc)(CrispyHookContext *ctx);
 #+end_src
@@ -152,6 +188,9 @@ typedef CrispyHookResult (*CrispyPluginHookFunc)(CrispyHookContext *ctx);
 Function signature for all hook callbacks. Plugins export functions named =crispy_plugin_on_<hook_name>= matching this signature.
 
 *** CrispyConfigInitFunc
+:PROPERTIES:
+:CUSTOM_ID: crispyconfiginitfunc
+:END:
 #+begin_src C
 typedef gboolean (*CrispyConfigInitFunc)(CrispyConfigContext *ctx);
 #+end_src
@@ -159,6 +198,9 @@ typedef gboolean (*CrispyConfigInitFunc)(CrispyConfigContext *ctx);
 Function signature for the config file's entry point. The compiled config =.so= must export this as =crispy_config_init=.
 
 *** CrispyPluginInitFunc
+:PROPERTIES:
+:CUSTOM_ID: crispyplugininitfunc
+:END:
 #+begin_src C
 typedef gpointer (*CrispyPluginInitFunc)(void);
 #+end_src
@@ -166,6 +208,9 @@ typedef gpointer (*CrispyPluginInitFunc)(void);
 Optional plugin initialization function. Called once when the plugin is loaded. The return value is stored as =plugin_data= and passed to every hook invocation.
 
 *** CrispyPluginShutdownFunc
+:PROPERTIES:
+:CUSTOM_ID: crispypluginshutdownfunc
+:END:
 #+begin_src C
 typedef void (*CrispyPluginShutdownFunc)(gpointer plugin_data);
 #+end_src
@@ -175,7 +220,13 @@ Optional plugin shutdown function. Called once when the plugin engine is finaliz
 --------------
 
 ** Macros
+:PROPERTIES:
+:CUSTOM_ID: macros
+:END:
 *** CRISPY_ERROR
+:PROPERTIES:
+:CUSTOM_ID: crispy_error
+:END:
 #+begin_src C
 #define CRISPY_ERROR (crispy_error_quark())
 #+end_src
@@ -183,6 +234,9 @@ Optional plugin shutdown function. Called once when the plugin engine is finaliz
 The GQuark for the crispy error domain. Use with =g_error_matches()= and =g_assert_error()=.
 
 *** CRISPY_HASH_ALGO
+:PROPERTIES:
+:CUSTOM_ID: crispy_hash_algo
+:END:
 #+begin_src C
 #define CRISPY_HASH_ALGO (G_CHECKSUM_SHA256)
 #+end_src
@@ -190,6 +244,9 @@ The GQuark for the crispy error domain. Use with =g_error_matches()= and =g_asse
 The hash algorithm used for cache keys.
 
 *** CRISPY_MAX_PARAMS_LEN
+:PROPERTIES:
+:CUSTOM_ID: crispy_max_params_len
+:END:
 #+begin_src C
 #define CRISPY_MAX_PARAMS_LEN (8192)
 #+end_src
@@ -197,6 +254,9 @@ The hash algorithm used for cache keys.
 Maximum length of the CRISPY_PARAMS define value.
 
 *** CRISPY_PLUGIN_DEFINE
+:PROPERTIES:
+:CUSTOM_ID: crispy_plugin_define
+:END:
 #+begin_src C
 #define CRISPY_PLUGIN_DEFINE(name, description, version, author, license)
 #+end_src
@@ -204,6 +264,9 @@ Maximum length of the CRISPY_PARAMS define value.
 Convenience macro that generates the mandatory =crispy_plugin_info= symbol with the given metadata fields. Every plugin must use this macro exactly once.
 
 *** Version Macros
+:PROPERTIES:
+:CUSTOM_ID: version-macros
+:END:
 #+begin_src C
 #define CRISPY_VERSION_MAJOR  /* major version */
 #define CRISPY_VERSION_MINOR  /* minor version */
@@ -215,6 +278,9 @@ Convenience macro that generates the mandatory =crispy_plugin_info= symbol with 
 --------------
 
 ** CrispyCompiler (GInterface)
+:PROPERTIES:
+:CUSTOM_ID: crispycompiler-ginterface
+:END:
 *Type macro:* =CRISPY_TYPE_COMPILER=
 
 *Check macro:* =CRISPY_IS_COMPILER(obj)=
@@ -222,6 +288,9 @@ Convenience macro that generates the mandatory =crispy_plugin_info= symbol with 
 *Cast macro:* =CRISPY_COMPILER(obj)=
 
 *** crispy_compiler_get_version
+:PROPERTIES:
+:CUSTOM_ID: crispy_compiler_get_version
+:END:
 #+begin_src C
 const gchar *
 crispy_compiler_get_version(CrispyCompiler *self);
@@ -236,6 +305,9 @@ Returns the compiler version string. Used as part of the cache key to invalidate
 *Returns:* (transfer none) the compiler version string
 
 *** crispy_compiler_get_base_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_compiler_get_base_flags
+:END:
 #+begin_src C
 const gchar *
 crispy_compiler_get_base_flags(CrispyCompiler *self);
@@ -250,6 +322,9 @@ Returns the base compiler and linker flags for the default libraries (glib-2.0, 
 *Returns:* (transfer none) the base flags string
 
 *** crispy_compiler_compile_shared
+:PROPERTIES:
+:CUSTOM_ID: crispy_compiler_compile_shared
+:END:
 #+begin_src C
 gboolean
 crispy_compiler_compile_shared(CrispyCompiler  *self,
@@ -272,6 +347,9 @@ Compiles the source file to a shared object suitable for loading with =g_module_
 *Returns:* TRUE on success, FALSE on error
 
 *** crispy_compiler_compile_executable
+:PROPERTIES:
+:CUSTOM_ID: crispy_compiler_compile_executable
+:END:
 #+begin_src C
 gboolean
 crispy_compiler_compile_executable(CrispyCompiler  *self,
@@ -296,6 +374,9 @@ Compiles the source file to a standalone executable with debug symbols. Used for
 --------------
 
 ** CrispyCacheProvider (GInterface)
+:PROPERTIES:
+:CUSTOM_ID: crispycacheprovider-ginterface
+:END:
 *Type macro:* =CRISPY_TYPE_CACHE_PROVIDER=
 
 *Check macro:* =CRISPY_IS_CACHE_PROVIDER(obj)=
@@ -303,6 +384,9 @@ Compiles the source file to a standalone executable with debug symbols. Used for
 *Cast macro:* =CRISPY_CACHE_PROVIDER(obj)=
 
 *** crispy_cache_provider_compute_hash
+:PROPERTIES:
+:CUSTOM_ID: crispy_cache_provider_compute_hash
+:END:
 #+begin_src C
 gchar *
 crispy_cache_provider_compute_hash(CrispyCacheProvider *self,
@@ -325,6 +409,9 @@ Computes a hash key from the source content, extra flags, and compiler version.
 *Returns:* (transfer full) hex digest string, free with =g_free()=
 
 *** crispy_cache_provider_get_path
+:PROPERTIES:
+:CUSTOM_ID: crispy_cache_provider_get_path
+:END:
 #+begin_src C
 gchar *
 crispy_cache_provider_get_path(CrispyCacheProvider *self,
@@ -341,6 +428,9 @@ Returns the full path to the cached artifact for a given hash.
 *Returns:* (transfer full) file path string, free with =g_free()=
 
 *** crispy_cache_provider_has_valid
+:PROPERTIES:
+:CUSTOM_ID: crispy_cache_provider_has_valid
+:END:
 #+begin_src C
 gboolean
 crispy_cache_provider_has_valid(CrispyCacheProvider *self,
@@ -359,6 +449,9 @@ Checks if a valid cached artifact exists for the given hash. If =source_path= is
 *Returns:* TRUE if a valid cache entry exists
 
 *** crispy_cache_provider_purge
+:PROPERTIES:
+:CUSTOM_ID: crispy_cache_provider_purge
+:END:
 #+begin_src C
 gboolean
 crispy_cache_provider_purge(CrispyCacheProvider *self,
@@ -377,6 +470,9 @@ Purges all cached artifacts managed by this provider.
 --------------
 
 ** CrispyGccCompiler (Final Type)
+:PROPERTIES:
+:CUSTOM_ID: crispygcccompiler-final-type
+:END:
 *Type macro:* =CRISPY_TYPE_GCC_COMPILER=
 
 *Check macros:* =CRISPY_IS_GCC_COMPILER(obj)=, =CRISPY_IS_COMPILER(obj)=
@@ -386,6 +482,9 @@ Purges all cached artifacts managed by this provider.
 *Implements:* CrispyCompiler
 
 *** crispy_gcc_compiler_new
+:PROPERTIES:
+:CUSTOM_ID: crispy_gcc_compiler_new
+:END:
 #+begin_src C
 CrispyGccCompiler *
 crispy_gcc_compiler_new(GError **error);
@@ -402,6 +501,9 @@ Creates a new CrispyGccCompiler instance. On construction, probes gcc for its ve
 --------------
 
 ** CrispyFileCache (Final Type)
+:PROPERTIES:
+:CUSTOM_ID: crispyfilecache-final-type
+:END:
 *Type macro:* =CRISPY_TYPE_FILE_CACHE=
 
 *Check macros:* =CRISPY_IS_FILE_CACHE(obj)=, =CRISPY_IS_CACHE_PROVIDER(obj)=
@@ -411,6 +513,9 @@ Creates a new CrispyGccCompiler instance. On construction, probes gcc for its ve
 *Implements:* CrispyCacheProvider
 
 *** crispy_file_cache_new
+:PROPERTIES:
+:CUSTOM_ID: crispy_file_cache_new
+:END:
 #+begin_src C
 CrispyFileCache *
 crispy_file_cache_new(void);
@@ -421,6 +526,9 @@ Creates a new CrispyFileCache instance. The cache directory (=~/.cache/crispy/=)
 *Returns:* (transfer full) a new CrispyFileCache
 
 *** crispy_file_cache_get_dir
+:PROPERTIES:
+:CUSTOM_ID: crispy_file_cache_get_dir
+:END:
 #+begin_src C
 const gchar *
 crispy_file_cache_get_dir(CrispyFileCache *self);
@@ -437,6 +545,9 @@ Returns the path to the cache directory.
 --------------
 
 ** CrispyPluginEngine (Final Type)
+:PROPERTIES:
+:CUSTOM_ID: crispypluginengine-final-type
+:END:
 *Type macro:* =CRISPY_TYPE_PLUGIN_ENGINE=
 
 *Check macro:* =CRISPY_IS_PLUGIN_ENGINE(obj)=
@@ -444,6 +555,9 @@ Returns the path to the cache directory.
 *Cast macro:* =CRISPY_PLUGIN_ENGINE(obj)=
 
 *** crispy_plugin_engine_new
+:PROPERTIES:
+:CUSTOM_ID: crispy_plugin_engine_new
+:END:
 #+begin_src C
 CrispyPluginEngine *
 crispy_plugin_engine_new(void);
@@ -454,6 +568,9 @@ Creates a new empty plugin engine with no plugins loaded.
 *Returns:* (transfer full) a new CrispyPluginEngine
 
 *** crispy_plugin_engine_load
+:PROPERTIES:
+:CUSTOM_ID: crispy_plugin_engine_load
+:END:
 #+begin_src C
 gboolean
 crispy_plugin_engine_load(CrispyPluginEngine  *self,
@@ -472,6 +589,9 @@ Loads a single plugin from the given path. The plugin must export a =crispy_plug
 *Returns:* TRUE on success, FALSE on error
 
 *** crispy_plugin_engine_load_paths
+:PROPERTIES:
+:CUSTOM_ID: crispy_plugin_engine_load_paths
+:END:
 #+begin_src C
 gboolean
 crispy_plugin_engine_load_paths(CrispyPluginEngine  *self,
@@ -490,6 +610,9 @@ Splits =paths= on =:= and =,= delimiters, then loads each path via =crispy_plugi
 *Returns:* TRUE if all plugins loaded, FALSE on first error
 
 *** crispy_plugin_engine_get_plugin_count
+:PROPERTIES:
+:CUSTOM_ID: crispy_plugin_engine_get_plugin_count
+:END:
 #+begin_src C
 guint
 crispy_plugin_engine_get_plugin_count(CrispyPluginEngine *self);
@@ -504,6 +627,9 @@ Returns the number of currently loaded plugins.
 *Returns:* the plugin count
 
 *** crispy_plugin_engine_set_data
+:PROPERTIES:
+:CUSTOM_ID: crispy_plugin_engine_set_data
+:END:
 #+begin_src C
 void
 crispy_plugin_engine_set_data(CrispyPluginEngine *self,
@@ -522,6 +648,9 @@ Stores arbitrary data in the engine's shared data store, keyed by =key=. This al
 - =destroy= -- (nullable) destroy notify for =data=
 
 *** crispy_plugin_engine_get_data
+:PROPERTIES:
+:CUSTOM_ID: crispy_plugin_engine_get_data
+:END:
 #+begin_src C
 gpointer
 crispy_plugin_engine_get_data(CrispyPluginEngine *self,
@@ -540,6 +669,9 @@ Retrieves data previously stored with =crispy_plugin_engine_set_data()=.
 --------------
 
 ** CrispyScript (Final Type)
+:PROPERTIES:
+:CUSTOM_ID: crispyscript-final-type
+:END:
 *Type macro:* =CRISPY_TYPE_SCRIPT=
 
 *Check macro:* =CRISPY_IS_SCRIPT(obj)=
@@ -547,6 +679,9 @@ Retrieves data previously stored with =crispy_plugin_engine_set_data()=.
 *Cast macro:* =CRISPY_SCRIPT(obj)=
 
 *** crispy_script_new_from_file
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_new_from_file
+:END:
 #+begin_src C
 CrispyScript *
 crispy_script_new_from_file(const gchar          *path,
@@ -569,6 +704,9 @@ Creates a new CrispyScript from a source file. Reads the file, extracts CRISPY_P
 *Returns:* (transfer full) a new CrispyScript, or NULL on error
 
 *** crispy_script_new_from_inline
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_new_from_inline
+:END:
 #+begin_src C
 CrispyScript *
 crispy_script_new_from_inline(const gchar          *code,
@@ -593,6 +731,9 @@ Creates a new CrispyScript from inline code. The code is wrapped in a =main()= f
 *Returns:* (transfer full) a new CrispyScript, or NULL on error
 
 *** crispy_script_new_from_stdin
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_new_from_stdin
+:END:
 #+begin_src C
 CrispyScript *
 crispy_script_new_from_stdin(CrispyCompiler       *compiler,
@@ -613,6 +754,9 @@ Creates a new CrispyScript by reading C code from stdin until EOF. The code is w
 *Returns:* (transfer full) a new CrispyScript, or NULL on error
 
 *** crispy_script_execute
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_execute
+:END:
 #+begin_src C
 gint
 crispy_script_execute(CrispyScript  *self,
@@ -633,6 +777,9 @@ Executes the full pipeline: hash, cache check, compile (if needed), load, run ma
 *Returns:* the script's exit code, or -1 on error
 
 *** crispy_script_get_exit_code
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_get_exit_code
+:END:
 #+begin_src C
 gint
 crispy_script_get_exit_code(CrispyScript *self);
@@ -647,6 +794,9 @@ Returns the exit code from the last execution.
 *Returns:* the exit code
 
 *** crispy_script_get_temp_source_path
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_get_temp_source_path
+:END:
 #+begin_src C
 const gchar *
 crispy_script_get_temp_source_path(CrispyScript *self);
@@ -661,6 +811,9 @@ Returns the path to the temporary modified source file. Only meaningful with =CR
 *Returns:* (transfer none) (nullable) the temp source path
 
 *** crispy_script_set_plugin_engine
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_set_plugin_engine
+:END:
 #+begin_src C
 void
 crispy_script_set_plugin_engine(CrispyScript       *self,
@@ -675,6 +828,9 @@ Sets the plugin engine for this script. When set, hook functions from loaded plu
 - =engine= -- (transfer none) (nullable) a CrispyPluginEngine, or NULL
 
 *** crispy_script_set_extra_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_set_extra_flags
+:END:
 #+begin_src C
 void
 crispy_script_set_extra_flags(CrispyScript *self,
@@ -689,6 +845,9 @@ Sets extra compiler flags that are *prepended* before the script's own CRISPY_PA
 - =extra_flags= -- (nullable) additional compiler flags from config
 
 *** crispy_script_set_override_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_set_override_flags
+:END:
 #+begin_src C
 void
 crispy_script_set_override_flags(CrispyScript *self,
@@ -705,13 +864,19 @@ Sets override compiler flags that are *appended* after the script's CRISPY_PARAM
 --------------
 
 ** CrispyConfigContext (Plain Struct)
+:PROPERTIES:
+:CUSTOM_ID: crispyconfigcontext-plain-struct
+:END:
 An opaque context structure passed to =crispy_config_init()= in config files. Config authors use the setter/getter functions to inspect and modify crispy's behavior before script execution.
 
 This is NOT a GObject -- it is a short-lived struct allocated on the stack in =main()=.
 
-See [[file:config.org][docs/config.org]] for the full configuration guide.
+See [[file:config.org][docs/config.md]] for the full configuration guide.
 
 *** crispy_config_context_get_crispy_argc
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_get_crispy_argc
+:END:
 #+begin_src C
 gint
 crispy_config_context_get_crispy_argc(CrispyConfigContext *ctx);
@@ -720,6 +885,9 @@ crispy_config_context_get_crispy_argc(CrispyConfigContext *ctx);
 Returns crispy's own argument count (the full original command line).
 
 *** crispy_config_context_get_crispy_argv
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_get_crispy_argv
+:END:
 #+begin_src C
 const gchar * const *
 crispy_config_context_get_crispy_argv(CrispyConfigContext *ctx);
@@ -728,6 +896,9 @@ crispy_config_context_get_crispy_argv(CrispyConfigContext *ctx);
 Returns crispy's own argument vector (read-only).
 
 *** crispy_config_context_get_script_argc
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_get_script_argc
+:END:
 #+begin_src C
 gint
 crispy_config_context_get_script_argc(CrispyConfigContext *ctx);
@@ -736,6 +907,9 @@ crispy_config_context_get_script_argc(CrispyConfigContext *ctx);
 Returns the script's argument count.
 
 *** crispy_config_context_get_script_argv
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_get_script_argv
+:END:
 #+begin_src C
 gchar **
 crispy_config_context_get_script_argv(CrispyConfigContext *ctx);
@@ -744,6 +918,9 @@ crispy_config_context_get_script_argv(CrispyConfigContext *ctx);
 Returns the script's argument vector.
 
 *** crispy_config_context_get_script_path
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_get_script_path
+:END:
 #+begin_src C
 const gchar *
 crispy_config_context_get_script_path(CrispyConfigContext *ctx);
@@ -752,6 +929,9 @@ crispy_config_context_get_script_path(CrispyConfigContext *ctx);
 Returns the path of the script about to run. Returns NULL for inline (=-i=) or stdin (=-=) modes.
 
 *** crispy_config_context_set_extra_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_set_extra_flags
+:END:
 #+begin_src C
 void
 crispy_config_context_set_extra_flags(CrispyConfigContext *ctx,
@@ -761,6 +941,9 @@ crispy_config_context_set_extra_flags(CrispyConfigContext *ctx,
 Sets default compiler flags *prepended* before CRISPY_PARAMS (lowest priority). Replaces any previously set extra_flags.
 
 *** crispy_config_context_append_extra_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_append_extra_flags
+:END:
 #+begin_src C
 void
 crispy_config_context_append_extra_flags(CrispyConfigContext *ctx,
@@ -770,6 +953,9 @@ crispy_config_context_append_extra_flags(CrispyConfigContext *ctx,
 Appends to the existing extra_flags string (space-separated).
 
 *** crispy_config_context_set_override_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_set_override_flags
+:END:
 #+begin_src C
 void
 crispy_config_context_set_override_flags(CrispyConfigContext *ctx,
@@ -779,6 +965,9 @@ crispy_config_context_set_override_flags(CrispyConfigContext *ctx,
 Sets override compiler flags *appended* after everything (highest priority). Replaces any previously set override_flags.
 
 *** crispy_config_context_append_override_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_append_override_flags
+:END:
 #+begin_src C
 void
 crispy_config_context_append_override_flags(CrispyConfigContext *ctx,
@@ -788,6 +977,9 @@ crispy_config_context_append_override_flags(CrispyConfigContext *ctx,
 Appends to the existing override_flags string (space-separated).
 
 *** crispy_config_context_add_plugin
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_add_plugin
+:END:
 #+begin_src C
 void
 crispy_config_context_add_plugin(CrispyConfigContext *ctx,
@@ -797,6 +989,9 @@ crispy_config_context_add_plugin(CrispyConfigContext *ctx,
 Queues a plugin =.so= for loading. Config plugins load before CLI plugins (=-P=). Multiple calls accumulate paths in order.
 
 *** crispy_config_context_set_plugin_data
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_set_plugin_data
+:END:
 #+begin_src C
 void
 crispy_config_context_set_plugin_data(CrispyConfigContext *ctx,
@@ -807,6 +1002,9 @@ crispy_config_context_set_plugin_data(CrispyConfigContext *ctx,
 Sets a key-value pair injected into the plugin engine's shared data store after config loading.
 
 *** crispy_config_context_set_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_set_flags
+:END:
 #+begin_src C
 void
 crispy_config_context_set_flags(CrispyConfigContext *ctx,
@@ -816,6 +1014,9 @@ crispy_config_context_set_flags(CrispyConfigContext *ctx,
 Sets the default CrispyFlags bitmask. CLI flags are OR'd on top (CLI always wins).
 
 *** crispy_config_context_add_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_add_flags
+:END:
 #+begin_src C
 void
 crispy_config_context_add_flags(CrispyConfigContext *ctx,
@@ -825,6 +1026,9 @@ crispy_config_context_add_flags(CrispyConfigContext *ctx,
 Adds flags to the existing bitmask (OR operation).
 
 *** crispy_config_context_set_cache_dir
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_set_cache_dir
+:END:
 #+begin_src C
 void
 crispy_config_context_set_cache_dir(CrispyConfigContext *ctx,
@@ -834,6 +1038,9 @@ crispy_config_context_set_cache_dir(CrispyConfigContext *ctx,
 Overrides the cache directory. CLI =--cache-dir= takes precedence if also set.
 
 *** crispy_config_context_set_script_argv
+:PROPERTIES:
+:CUSTOM_ID: crispy_config_context_set_script_argv
+:END:
 #+begin_src C
 void
 crispy_config_context_set_script_argv(CrispyConfigContext *ctx,
@@ -846,6 +1053,9 @@ Replaces the script's argv entirely. The context takes ownership of =argv= (free
 --------------
 
 ** pkg-config
+:PROPERTIES:
+:CUSTOM_ID: pkg-config
+:END:
 After =make install=, use pkg-config to get compiler/linker flags:
 
 #+begin_src sh

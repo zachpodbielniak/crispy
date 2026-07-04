@@ -1,10 +1,19 @@
 * Crispy Script Authoring Guide
+:PROPERTIES:
+:CUSTOM_ID: crispy-script-authoring-guide
+:END:
 ** What is Crispy?
+:PROPERTIES:
+:CUSTOM_ID: what-is-crispy
+:END:
 Crispy (Crispy Really Is Super Powerful Yo) is a GLib-native C scripting tool. It compiles C source files to shared objects on-the-fly, caches them by content hash, and loads/executes them via GModule. Scripts link against glib-2.0, gobject-2.0, gio-2.0, and gmodule-2.0 by default -- no extra configuration needed.
 
 The result is that you can write and execute C programs as if they were scripts, with instant startup on subsequent runs thanks to caching.
 
 ** Script Format
+:PROPERTIES:
+:CUSTOM_ID: script-format
+:END:
 A crispy script is a standard C source file with an optional shebang and optional =CRISPY_PARAMS=:
 
 #+begin_src C
@@ -25,6 +34,9 @@ main(
 #+end_src
 
 *** Shebang
+:PROPERTIES:
+:CUSTOM_ID: shebang
+:END:
 The =#!/usr/bin/crispy= line is optional. When present, it allows the script to be executed directly:
 
 #+begin_src sh
@@ -35,6 +47,9 @@ chmod +x script.c
 Crispy automatically strips the shebang line before compilation so gcc does not see it.
 
 *** CRISPY_PARAMS
+:PROPERTIES:
+:CUSTOM_ID: crispy_params
+:END:
 The =#define CRISPY_PARAMS "..."= line specifies additional compiler flags. The value is shell-expanded, so backticks and =$()= work:
 
 #+begin_src C
@@ -51,6 +66,9 @@ The =#define CRISPY_PARAMS "..."= line specifies additional compiler flags. The 
 The CRISPY_PARAMS line is extracted and removed from the source before compilation. The expanded value becomes part of the cache key, so different pkg-config outputs (e.g., on different systems) produce separate cached binaries.
 
 *** main() Signature
+:PROPERTIES:
+:CUSTOM_ID: main-signature
+:END:
 Scripts must define a =main()= function with the standard C signature:
 
 #+begin_src C
@@ -67,6 +85,9 @@ main(
 The return value propagates as the script's exit code.
 
 ** Default Available Libraries
+:PROPERTIES:
+:CUSTOM_ID: default-available-libraries
+:END:
 Every crispy script links against these libraries automatically:
 
 | Library     | Provides                                                            |
@@ -86,6 +107,9 @@ You can =#include= any header from these libraries without additional configurat
 #+end_src
 
 ** Adding Extra Dependencies
+:PROPERTIES:
+:CUSTOM_ID: adding-extra-dependencies
+:END:
 Use =CRISPY_PARAMS= with =pkg-config= to add libraries:
 
 #+begin_src C
@@ -107,7 +131,13 @@ Use =CRISPY_PARAMS= with =pkg-config= to add libraries:
 #+end_src
 
 ** Execution Modes
+:PROPERTIES:
+:CUSTOM_ID: execution-modes
+:END:
 *** File Mode
+:PROPERTIES:
+:CUSTOM_ID: file-mode
+:END:
 The most common mode. Pass a =.c= file path:
 
 #+begin_src sh
@@ -116,6 +146,9 @@ crispy script.c arg1 arg2
 #+end_src
 
 *** Inline Mode (-i)
+:PROPERTIES:
+:CUSTOM_ID: inline-mode--i
+:END:
 Execute a C expression directly. The code is wrapped in a =main()= function with default GLib includes:
 
 #+begin_src sh
@@ -131,6 +164,9 @@ crispy -I "math.h;stdlib.h" -i 'g_print("%f\n", sqrt(2.0)); return 0;'
 Note: inline mode does not support =CRISPY_PARAMS=.
 
 *** Stdin Mode (-)
+:PROPERTIES:
+:CUSTOM_ID: stdin-mode--
+:END:
 When input is piped, Crispy reads the script from stdin. The explicit
 =-= argument is optional -- a bare =crispy= with piped input reads
 stdin automatically (it is only treated as stdin when stdin is not a
@@ -174,6 +210,9 @@ echo $?  # prints 42
 #+end_src
 
 *** Shebang Mode
+:PROPERTIES:
+:CUSTOM_ID: shebang-mode
+:END:
 Make the script executable:
 
 #+begin_src sh
@@ -184,6 +223,9 @@ chmod +x script.c
 The kernel invokes =crispy script.c arg1 arg2= via the shebang.
 
 ** Argument Passing
+:PROPERTIES:
+:CUSTOM_ID: argument-passing
+:END:
 Arguments after the script path are passed to the script's =main()=:
 
 #+begin_src sh
@@ -198,6 +240,9 @@ crispy -i 'g_print("arg1=%s\n", argv[1]); return 0;' hello
 #+end_src
 
 ** Caching
+:PROPERTIES:
+:CUSTOM_ID: caching
+:END:
 Crispy caches compiled shared objects in =~/.cache/crispy/=. The cache key is a SHA256 hash of:
 
 1. The full source content
@@ -205,11 +250,17 @@ Crispy caches compiled shared objects in =~/.cache/crispy/=. The cache key is a 
 3. The compiler version string
 
 *** Cache Behavior
+:PROPERTIES:
+:CUSTOM_ID: cache-behavior
+:END:
 - *First run*: Source is compiled to a =.so= and cached. This takes a moment.
 - *Subsequent runs*: If the cache entry exists and the source hasn't changed, the cached =.so= is loaded directly. Startup is nearly instant.
 - *Source changes*: Any modification to the source, CRISPY_PARAMS, or compiler version invalidates the cache.
 
 *** Cache Management
+:PROPERTIES:
+:CUSTOM_ID: cache-management
+:END:
 #+begin_src sh
 # Force recompilation (skip cache)
 crispy -n script.c
@@ -219,6 +270,9 @@ crispy --clean-cache
 #+end_src
 
 ** Debugging with GDB
+:PROPERTIES:
+:CUSTOM_ID: debugging-with-gdb
+:END:
 Use =--gdb= to compile the script as a standalone executable with debug symbols (=-g -O0=) and launch it under gdb:
 
 #+begin_src sh
@@ -228,6 +282,9 @@ crispy --gdb script.c
 This compiles the source to a temporary executable (not a .so) and runs =gdb --args <executable> <script_args>=.
 
 ** Other Options
+:PROPERTIES:
+:CUSTOM_ID: other-options
+:END:
 #+begin_src sh
 # Keep temp source files (useful for debugging preprocessed source)
 crispy -S script.c
@@ -246,13 +303,22 @@ crispy --license
 #+end_src
 
 ** Performance Tips
+:PROPERTIES:
+:CUSTOM_ID: performance-tips
+:END:
 - *Warm runs are fast*: After the first compilation, cached scripts load in milliseconds via =g_module_open()=.
 - *Cold runs depend on gcc*: First compilation time depends on script complexity and linked libraries.
 - *Cache is per-system*: Different compiler versions or pkg-config outputs produce separate cache entries. This is intentional -- binaries are not portable across systems.
 - *Use =-n= sparingly*: Forcing recompilation on every run negates the caching benefit.
 
 ** Common Patterns
+:PROPERTIES:
+:CUSTOM_ID: common-patterns
+:END:
 *** GLib Data Structures
+:PROPERTIES:
+:CUSTOM_ID: glib-data-structures
+:END:
 #+begin_src C
 #!/usr/bin/crispy
 #include <glib.h>
@@ -283,6 +349,9 @@ main(
 #+end_src
 
 *** GIO File Operations
+:PROPERTIES:
+:CUSTOM_ID: gio-file-operations
+:END:
 #+begin_src C
 #!/usr/bin/crispy
 #include <glib.h>
@@ -317,6 +386,9 @@ main(
 #+end_src
 
 *** Using g_autoptr
+:PROPERTIES:
+:CUSTOM_ID: using-g_autoptr
+:END:
 Crispy scripts fully support GLib's =g_autoptr()= for automatic resource management:
 
 #+begin_src C

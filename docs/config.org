@@ -1,10 +1,19 @@
 * Crispy Configuration
+:PROPERTIES:
+:CUSTOM_ID: crispy-configuration
+:END:
 ** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
 Crispy supports a C-based configuration file that is compiled and loaded using crispy's own infrastructure. The config file is itself a C source file that gets compiled to a shared object, cached by content hash, and loaded before any script runs.
 
 This gives configuration files full access to GLib/GObject APIs and any libraries linked via =CRISPY_PARAMS=, making crispy's config system as powerful as its scripting system.
 
 ** Quick Start
+:PROPERTIES:
+:CUSTOM_ID: quick-start
+:END:
 Generate the default config template:
 
 #+begin_src sh
@@ -15,6 +24,9 @@ crispy --generate-c-config > ~/.config/crispy/config.c
 Edit the config to enable features, then run any script normally -- the config compiles automatically on first use and is cached by SHA256 for subsequent runs.
 
 ** Config File Search Order
+:PROPERTIES:
+:CUSTOM_ID: config-file-search-order
+:END:
 Crispy searches for a config file in the following order (first found wins):
 
 1. =$CRISPY_CONFIG_FILE= environment variable
@@ -24,6 +36,9 @@ Crispy searches for a config file in the following order (first found wins):
 5. =/usr/share/crispy/config.c=
 
 ** Bypassing Configuration
+:PROPERTIES:
+:CUSTOM_ID: bypassing-configuration
+:END:
 To skip config loading entirely:
 
 #+begin_src sh
@@ -35,6 +50,9 @@ NO_CRISPY_CONFIG=1 crispy script.c
 #+end_src
 
 ** Config File Structure
+:PROPERTIES:
+:CUSTOM_ID: config-file-structure
+:END:
 A config file must include =<crispy.h>= and export a =crispy_config_init= function:
 
 #+begin_src C
@@ -51,6 +69,9 @@ crispy_config_init(CrispyConfigContext *ctx)
 The function receives a =CrispyConfigContext= pointer with setter/getter functions for all configurable aspects. Returning =TRUE= applies the configuration; returning =FALSE= skips it (crispy falls back to defaults).
 
 *** CRISPY_PARAMS in Config Files
+:PROPERTIES:
+:CUSTOM_ID: crispy_params-in-config-files
+:END:
 Config files can define =CRISPY_PARAMS= just like regular scripts to link against additional libraries needed by the config itself:
 
 #+begin_src C
@@ -68,7 +89,13 @@ crispy_config_init(CrispyConfigContext *ctx)
 #+end_src
 
 ** Configuration Options
+:PROPERTIES:
+:CUSTOM_ID: configuration-options
+:END:
 *** Compiler Flags
+:PROPERTIES:
+:CUSTOM_ID: compiler-flags
+:END:
 Crispy uses a three-tier compiler flag system. The precedence is based on gcc's last-wins behavior for conflicting flags:
 
 | Tier | Source           | Priority | Description                                       |
@@ -100,6 +127,9 @@ crispy_config_context_append_override_flags(ctx, "-Wno-unused-variable");
 #+end_src
 
 *** Per-Script Conditionals
+:PROPERTIES:
+:CUSTOM_ID: per-script-conditionals
+:END:
 Use =crispy_config_context_get_script_path()= to apply different settings per script:
 
 #+begin_src C
@@ -122,6 +152,9 @@ crispy_config_init(CrispyConfigContext *ctx)
 The script path is =NULL= for inline (=-i=) and stdin (=-=) modes.
 
 *** Plugin Loading
+:PROPERTIES:
+:CUSTOM_ID: plugin-loading
+:END:
 Plugins specified in the config file load before CLI-specified plugins (=-P=):
 
 #+begin_src C
@@ -132,6 +165,9 @@ crispy_config_context_add_plugin(ctx,
 #+end_src
 
 *** Plugin Configuration Data
+:PROPERTIES:
+:CUSTOM_ID: plugin-configuration-data
+:END:
 Set key-value data that plugins can access via =crispy_plugin_engine_get_data()=:
 
 #+begin_src C
@@ -140,6 +176,9 @@ crispy_config_context_set_plugin_data(ctx,
 #+end_src
 
 *** CrispyFlags
+:PROPERTIES:
+:CUSTOM_ID: crispyflags
+:END:
 Set default flags. CLI flags are OR'd on top (CLI always wins):
 
 #+begin_src C
@@ -151,6 +190,9 @@ crispy_config_context_add_flags(ctx, CRISPY_FLAG_PRESERVE_SOURCE);
 #+end_src
 
 *** Cache Directory
+:PROPERTIES:
+:CUSTOM_ID: cache-directory
+:END:
 Override the default cache directory (=~/.cache/crispy/=):
 
 #+begin_src C
@@ -160,6 +202,9 @@ crispy_config_context_set_cache_dir(ctx, "/tmp/crispy-cache");
 Note: if the CLI =--cache-dir= option is also provided, the CLI value takes precedence.
 
 *** Script Arguments
+:PROPERTIES:
+:CUSTOM_ID: script-arguments
+:END:
 Inspect and optionally replace the script's argument vector:
 
 #+begin_src C
@@ -179,6 +224,9 @@ crispy_config_context_set_script_argv(ctx, 2, new_argv);
 #+end_src
 
 *** Crispy's Own Arguments
+:PROPERTIES:
+:CUSTOM_ID: crispys-own-arguments
+:END:
 Access crispy's full original command line (read-only):
 
 #+begin_src C
@@ -187,6 +235,9 @@ const gchar * const *c_argv = crispy_config_context_get_crispy_argv(ctx);
 #+end_src
 
 ** Execution Order
+:PROPERTIES:
+:CUSTOM_ID: execution-order
+:END:
 The config file runs early in the startup sequence:
 
 1. Parse CLI arguments
@@ -204,9 +255,15 @@ The config file runs early in the startup sequence:
 13. Execute script
 
 ** Caching
+:PROPERTIES:
+:CUSTOM_ID: caching
+:END:
 Config files are cached using the same SHA256 content-hash mechanism as scripts. Editing the config file automatically triggers recompilation on the next run. The compiled =.so= is kept loaded for the duration of the process.
 
 ** Full Example
+:PROPERTIES:
+:CUSTOM_ID: full-example
+:END:
 #+begin_src C
 /*
  * My crispy config
@@ -241,4 +298,7 @@ crispy_config_init(CrispyConfigContext *ctx)
 #+end_src
 
 ** API Reference
+:PROPERTIES:
+:CUSTOM_ID: api-reference
+:END:
 See [[file:api.org]] for the complete =CrispyConfigContext= API reference.
