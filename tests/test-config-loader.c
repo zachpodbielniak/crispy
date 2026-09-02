@@ -4,6 +4,7 @@
 #include "../src/crispy.h"
 #include "../src/core/crispy-config-loader.h"
 #include "../src/core/crispy-config-context.h"
+#include "crispy-test-cache.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -380,6 +381,13 @@ main(
     gint    argc,
     gchar **argv
 ){
+    /*
+     * Before g_test_init(), because g_get_user_cache_dir() caches
+     * its first answer and this suite must not compile into -- or
+     * purge -- the developer's own ~/.cache/crispy.
+     */
+    crispy_test_use_temp_cache();
+
     g_test_init(&argc, &argv, NULL);
 
     g_test_add_func("/config-loader/find-none",

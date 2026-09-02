@@ -31,7 +31,9 @@ typedef enum
     CRISPY_FLAG_FORCE_COMPILE   = 1 << 0,
     CRISPY_FLAG_PRESERVE_SOURCE = 1 << 1,
     CRISPY_FLAG_DRY_RUN         = 1 << 2,
-    CRISPY_FLAG_GDB             = 1 << 3
+    CRISPY_FLAG_GDB             = 1 << 3,
+    CRISPY_FLAG_PROFILE         = 1 << 4,
+    CRISPY_FLAG_WATCH           = 1 << 5
 } CrispyFlags;
 #+end_src
 
@@ -42,8 +44,10 @@ Bitmask flags controlling script compilation and execution behavior.
 | =CRISPY_FLAG_NONE=            | No special flags                                           |
 | =CRISPY_FLAG_FORCE_COMPILE=   | Skip cache, force recompilation                            |
 | =CRISPY_FLAG_PRESERVE_SOURCE= | Keep temp source files in /tmp                             |
-| =CRISPY_FLAG_DRY_RUN=         | Show compilation command without executing                 |
+| =CRISPY_FLAG_DRY_RUN=         | Describe the compile, or the cache hit, and do not execute |
 | =CRISPY_FLAG_GDB=             | Compile as executable with debug symbols, launch under gdb |
+| =CRISPY_FLAG_PROFILE=         | Compile as an executable with =-pg=, run it, report        |
+| =CRISPY_FLAG_WATCH=           | Re-run the script when it changes                          |
 
 *** CrispyError
 :PROPERTIES:
@@ -587,6 +591,12 @@ crispy_plugin_engine_load(CrispyPluginEngine  *self,
 #+end_src
 
 Loads a single plugin from the given path. The plugin must export a =crispy_plugin_info= symbol. If the plugin exports a =crispy_plugin_init= function, it is called immediately.
+
+The =.so= is opened with =G_MODULE_BIND_LOCAL=, so its symbols are
+reachable through the engine's own handle and are not added to the
+process-wide namespace. Two plugins export the same names -- that is
+what the ABI is -- and putting both into one namespace is an ODR
+violation the loaded script shares.
 
 *Parameters:*
 

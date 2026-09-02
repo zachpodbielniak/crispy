@@ -187,6 +187,27 @@ All tests use the GLib GTest framework. Run with `make test`. Each test binary i
 
 Tests that compile C code at runtime (test-gcc-compiler, test-script) require gcc to be installed.
 
+### A test run must not touch the developer's cache
+
+`crispy_file_cache_new()` resolves `g_get_user_cache_dir()`, so every
+binary that builds a default cache compiled into the real
+`~/.cache/crispy` -- and `test-file-cache`'s two purge tests emptied it.
+Every such binary now calls `crispy_test_use_temp_cache()` from
+`tests/crispy-test-cache.h` as the **first statement in `main()`, before
+`g_test_init()`**: `g_get_user_cache_dir()` caches its answer on the
+first call, so a redirect after anything has asked is no redirect at all.
+
+The six are `test-config-loader`, `test-file-cache`, `test-plugin-engine`,
+`test-repl`, `test-script` and `test-watcher`. Adding a seventh means
+adding the call; `/file-cache/dir-is-not-the-users` only speaks for its
+own binary.
+
+Note that the test objects are intermediates of a two-rule chain, so make
+deletes each `.o` after linking. `-include $(TEST_OBJS:.o=.d)` in the
+Makefile is what makes an edit to a test *header* rebuild anything at
+all -- without it, `make` reports the binaries up to date and a sabotage
+of that header comes back green against the binary it did not rebuild.
+
 ## Documentation
 
 Docs live in `docs/` as Org-mode. Keep them in sync with code changes:

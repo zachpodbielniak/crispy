@@ -212,10 +212,23 @@ Defined in =src/core/crispy-plugin-engine.h/.c=. Final type -- not an interface.
 
 Manages the lifecycle of Crispy plugins. Plugins are =.so= files loaded via GModule that export well-known C symbols. The engine resolves these symbols at load time and dispatches hook calls during script execution.
 
+Every plugin exports the same set of names -- =crispy_plugin_info= is the
+ABI and cannot be made unique -- so they are opened with
+=G_MODULE_BIND_LOCAL=. Opened globally, two plugins put two definitions
+of each of those names into one process, and the second plugin's own
+references bind to the first plugin's copy; the same global scope is
+what a script's compiled module is loaded into. AddressSanitizer reports
+the pair as an =odr-violation= and aborts, which is what =make DEBUG=1
+ASAN=1 test= did. Nothing looks a plugin's symbols up by global name:
+they are reached with =g_module_symbol()= on the handle that loaded
+them, which searches that object either way.
+
 *Key features:*
 
 - Load plugins from paths (single or colon/comma-separated list)
 - Resolve mandatory =crispy_plugin_info= and optional hook/lifecycle symbols
+- Open each =.so= with =G_MODULE_BIND_LOCAL=, so its symbols reach the
+  engine's own handle and nothing else
 - Dispatch hooks at 9 pipeline phases
 - Shared data store for inter-plugin communication
 - Plugin init/shutdown lifecycle management
@@ -323,6 +336,16 @@ Source (file / -i / stdin)
 Exit with script's return code
 #+end_example
 
+=--dry-run= stops the pipeline immediately after step [6], whichever way
+the cache went, and prints what would have happened: =Would compile:
+<temp source> -> <cache path>= on a miss, =Would load: <cache path>= on a
+hit.  It used to be tested inside the =[MISS]= arm, so a warm cache --
+every run of a script after the first -- fell through to step [9] and
+executed it.  The answer to "does this run the script?" does not depend
+on the cache, so the test cannot live on one side of that branch; only
+the sentence printed does, which is why it comes after the lookup rather
+than before it.
+
 When plugins are loaded via =--plugins=/=-P=, each hook dispatches to all loaded plugins in order. If any plugin returns =CRISPY_HOOK_ABORT=, the pipeline stops immediately. All timing data is accumulated and available to post-execute hooks.
 
 ** Configuration System
@@ -418,7 +441,7 @@ All errors use the =CRISPY_ERROR= quark with specific error codes:
 |-------------------------------+-------------+-----------------------------------------------------|
 | =CRISPY_FLAG_FORCE_COMPILE=   | =-n=        | Skip cache, always recompile                        |
 | =CRISPY_FLAG_PRESERVE_SOURCE= | =-S=        | Keep the temp source file                           |
-| =CRISPY_FLAG_DRY_RUN=         | =--dry-run= | Show compilation command only                       |
+| =CRISPY_FLAG_DRY_RUN=         | =--dry-run= | Describe step [8] or the cache hit, then stop       |
 | =CRISPY_FLAG_GDB=             | =--gdb=     | Compile as executable, launch under gdb             |
 | =CRISPY_FLAG_PROFILE=         | =--profile= | Compile as an executable with =-pg=, run it, report |
 | =CRISPY_FLAG_WATCH=           | =-w=        | Re-run the script when it changes                   |

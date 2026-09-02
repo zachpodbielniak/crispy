@@ -69,7 +69,7 @@ Options:
       --gdb                 Compile with debug symbols, launch under gdb
       --profile             Compile with -pg, run, and print a gprof report
   -w, --watch               Re-run the script when it changes
-      --dry-run             Show compilation command without executing
+      --dry-run             Describe the compile (or the cache hit), do not run
       --clean-cache         Purge ~/.cache/crispy/ and exit
   -v, --version             Show version
       --license             Show AGPLv3 license notice

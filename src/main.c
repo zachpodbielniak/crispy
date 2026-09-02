@@ -87,7 +87,7 @@ static GOptionEntry entries[] =
     },
     {
         "dry-run", 0, 0, G_OPTION_ARG_NONE, &opt_dry_run,
-        "Show compilation command without executing", NULL
+        "Describe the compile (or the cache hit) without executing", NULL
     },
     {
         "plugins", 'P', 0, G_OPTION_ARG_STRING, &opt_plugins,

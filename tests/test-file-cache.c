@@ -4,6 +4,7 @@
 #include "../src/crispy.h"
 
 #include "../src/core/crispy-header-tracker-private.h"
+#include "crispy-test-cache.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -24,6 +25,36 @@ test_file_cache_new(void)
     dir = crispy_file_cache_get_dir(cache);
     g_assert_nonnull(dir);
     g_assert_true(g_file_test(dir, G_FILE_TEST_IS_DIR));
+}
+
+/*
+ * test: the cache this suite uses is not the developer's
+ *
+ * crispy_file_cache_new() resolves g_get_user_cache_dir(), and the two
+ * purge tests further down empty whatever that resolves to.  Without the
+ * redirect in main() they emptied the real ~/.cache/crispy: every entry
+ * a developer's next `crispy script.c` would have loaded, deleted by a
+ * run that reported itself green.
+ */
+static void
+test_file_cache_dir_is_not_the_users(void)
+{
+    g_autoptr(CrispyFileCache) cache = NULL;
+    g_autofree gchar *users_dir = NULL;
+    const gchar *dir;
+
+    /* the redirect ran at all */
+    g_assert_nonnull(crispy_test_cache_dir());
+
+    cache = crispy_file_cache_new();
+    dir = crispy_file_cache_get_dir(cache);
+    g_assert_nonnull(dir);
+
+    /* and a default cache landed inside the directory it made */
+    g_assert_true(g_str_has_prefix(dir, crispy_test_cache_dir()));
+
+    users_dir = g_build_filename(g_get_home_dir(), ".cache", "crispy", NULL);
+    g_assert_cmpstr(dir, !=, users_dir);
 }
 
 /* test: CrispyFileCache implements CrispyCacheProvider interface */
@@ -405,10 +436,19 @@ main(
     gint    argc,
     gchar **argv
 ){
+    /*
+     * Before g_test_init(), because g_get_user_cache_dir() caches
+     * its first answer and this suite must not compile into -- or
+     * purge -- the developer's own ~/.cache/crispy.
+     */
+    crispy_test_use_temp_cache();
+
     g_test_init(&argc, &argv, NULL);
 
     g_test_add_func("/file-cache/new",
                     test_file_cache_new);
+    g_test_add_func("/file-cache/dir-is-not-the-users",
+                    test_file_cache_dir_is_not_the_users);
     g_test_add_func("/file-cache/implements-interface",
                     test_file_cache_implements_interface);
     g_test_add_func("/file-cache/compute-hash-deterministic",

@@ -192,3 +192,10 @@ help:
 # Dependency tracking (optional, for incremental builds)
 -include $(LIB_OBJS:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
+
+# The test objects are intermediates of a two-rule chain, so make deletes
+# each one after linking and cannot see a header it included.  Editing
+# tests/crispy-test-cache.h relinked nothing at all -- which makes a
+# sabotage of that header come back green against the binary it did not
+# rebuild.  The depfile gcc already emits is what closes it.
+-include $(TEST_OBJS:.o=.d)

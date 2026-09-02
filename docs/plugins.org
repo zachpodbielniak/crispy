@@ -4,6 +4,14 @@
 :END:
 Crispy supports a plugin system that lets you extend the script execution pipeline without modifying crispy itself. Plugins are shared libraries (=.so= files) loaded at runtime via GModule.
 
+Each plugin is opened with =G_MODULE_BIND_LOCAL=: every plugin exports
+the same symbol names, so its own are kept out of the process-wide
+namespace that the loaded script also lives in. A plugin therefore
+cannot publish anything to a script, or to another plugin, by exporting
+a symbol -- the shared data store
+(=crispy_plugin_engine_set_data()= / =_get_data()=) is the supported way
+for plugins to reach each other.
+
 ** Quick Start
 :PROPERTIES:
 :CUSTOM_ID: quick-start

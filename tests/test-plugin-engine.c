@@ -3,8 +3,10 @@
 #define CRISPY_COMPILATION
 #include "crispy.h"
 #include "core/crispy-plugin-engine-private.h"
+#include "crispy-test-cache.h"
 
 #include <glib.h>
+#include <gmodule.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -337,6 +339,54 @@ test_script_plugin_abort(void)
 }
 
 /**
+ * test_engine_plugin_symbols_stay_local:
+ *
+ * Two plugins must not publish `crispy_plugin_info` to the whole process.
+ *
+ * Every plugin exports that symbol under that exact name -- it is the
+ * ABI -- so two of them opened into the global scope are two definitions
+ * of one name in one process, and a script's own compiled module is
+ * loaded into that same scope.  AddressSanitizer calls it what it is and
+ * aborts: `make DEBUG=1 ASAN=1 test` failed here with an odr-violation
+ * naming test-plugin-hooks.so and test-plugin-noop.so.
+ *
+ * Asking the main program's own handle is exactly a global-scope lookup:
+ * if it can resolve the name, some plugin published it.  The engine still
+ * reaching two plugins is the other half -- local means invisible to the
+ * process, not unreachable through the handle that loaded it.
+ */
+static void
+test_engine_plugin_symbols_stay_local(void)
+{
+    g_autoptr(CrispyPluginEngine) engine = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autofree gchar *noop_path = NULL;
+    g_autofree gchar *hooks_path = NULL;
+    GModule *self_module;
+    gpointer symbol;
+
+    engine = crispy_plugin_engine_new();
+    noop_path = get_test_plugin_path("noop");
+    hooks_path = get_test_plugin_path("hooks");
+
+    g_assert_true(crispy_plugin_engine_load(engine, noop_path, &error));
+    g_assert_no_error(error);
+    g_assert_true(crispy_plugin_engine_load(engine, hooks_path, &error));
+    g_assert_no_error(error);
+    g_assert_cmpuint(crispy_plugin_engine_get_plugin_count(engine), ==, 2);
+
+    self_module = g_module_open(NULL, G_MODULE_BIND_LAZY);
+    g_assert_nonnull(self_module);
+
+    symbol = NULL;
+    g_assert_false(g_module_symbol(self_module, "crispy_plugin_info",
+                                   &symbol));
+    g_assert_null(symbol);
+
+    g_module_close(self_module);
+}
+
+/**
  * test_engine_is_final_type:
  *
  * Verify CrispyPluginEngine is a final type.
@@ -352,6 +402,13 @@ main(
     gint    argc,
     gchar **argv
 ){
+    /*
+     * Before g_test_init(), because g_get_user_cache_dir() caches
+     * its first answer and this suite must not compile into -- or
+     * purge -- the developer's own ~/.cache/crispy.
+     */
+    crispy_test_use_temp_cache();
+
     g_test_init(&argc, &argv, NULL);
 
     /* determine plugin directory from LD_LIBRARY_PATH or default */
@@ -373,6 +430,8 @@ main(
     g_test_add_func("/plugin-engine/dispatch-abort", test_engine_dispatch_abort);
     g_test_add_func("/plugin-engine/script-with-plugins", test_script_with_plugins);
     g_test_add_func("/plugin-engine/script-plugin-abort", test_script_plugin_abort);
+    g_test_add_func("/plugin-engine/plugin-symbols-stay-local",
+                    test_engine_plugin_symbols_stay_local);
     g_test_add_func("/plugin-engine/is-final-type", test_engine_is_final_type);
 
     return g_test_run();

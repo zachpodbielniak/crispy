@@ -167,8 +167,25 @@ crispy_plugin_engine_load(
 
     priv = crispy_plugin_engine_get_instance_private(self);
 
-    /* open the shared library */
-    module = g_module_open(path, G_MODULE_BIND_LAZY);
+    /*
+     * Open the shared library, and open it *locally*.
+     *
+     * Every plugin exports `crispy_plugin_info` under that exact name --
+     * it is the ABI, so it cannot be made unique per plugin -- along with
+     * `crispy_plugin_init`, `crispy_plugin_shutdown` and one symbol per
+     * hook.  Loaded globally, two plugins are two definitions of each of
+     * those names in one process: the dynamic linker binds the second
+     * plugin's own references to the first plugin's copy, and the same
+     * global scope is what a script's compiled module is loaded into.
+     * AddressSanitizer reports the pair as an odr-violation and aborts,
+     * which is what `make DEBUG=1 ASAN=1 test` did on test-plugin-engine
+     * with the noop and hooks plugins loaded together.
+     *
+     * Nothing needs a plugin's symbols by global name: they are reached
+     * through g_module_symbol() on this handle, which searches this
+     * object whether or not the rest of the process can see it.
+     */
+    module = g_module_open(path, G_MODULE_BIND_LAZY | G_MODULE_BIND_LOCAL);
     if (module == NULL)
     {
         g_set_error(error,

@@ -925,16 +925,39 @@ crispy_script_execute(
     if (hook_result == CRISPY_HOOK_FORCE_RECOMPILE || ctx.force_recompile)
         cache_hit = FALSE;
 
-    if (!cache_hit)
+    /*
+     * A dry run describes what would happen and stops.
+     *
+     * The check used to sit inside the cache-miss branch below, which
+     * made it a description of a *cold* cache and nothing else: on a
+     * warm one -- every invocation of a script after the first, which is
+     * the case that happens most -- execution fell straight through it,
+     * loaded the cached module and called the script's main().  A flag
+     * whose whole promise is "without executing" ran the program.
+     *
+     * It belongs here, before the branch, because "does this execute?"
+     * has the same answer whichever way the cache went.  Only the
+     * sentence printed differs, and the cache is what it differs on, so
+     * the check has to come after the lookup rather than before it.
+     */
+    if (priv->flags & CRISPY_FLAG_DRY_RUN)
     {
-        /* write temp source */
-        if (!write_temp_source(priv, error))
-            return -1;
-
-        /* dry-run: just show what would happen */
-        if (priv->flags & CRISPY_FLAG_DRY_RUN)
+        if (cache_hit)
+        {
+            g_print("Would load: %s (cached, nothing to compile)\n",
+                    cached_so_path);
+        }
+        else
         {
             g_autofree gchar *shown_flags = NULL;
+
+            /*
+             * The stripped copy is what gcc would actually be handed, so
+             * naming it is part of describing the compile -- and writing
+             * it is how the path comes to exist to be named.
+             */
+            if (!write_temp_source(priv, error))
+                return -1;
 
             shown_flags = build_compile_flags(priv, NULL);
 
@@ -942,9 +965,17 @@ crispy_script_execute(
                     priv->temp_source_path, cached_so_path);
             g_print("Extra flags: %s\n",
                     shown_flags[0] != '\0' ? shown_flags : "(none)");
-            priv->exit_code = 0;
-            return 0;
         }
+
+        priv->exit_code = 0;
+        return 0;
+    }
+
+    if (!cache_hit)
+    {
+        /* write temp source */
+        if (!write_temp_source(priv, error))
+            return -1;
 
         /* gdb mode: compile as executable and exec gdb */
         if (priv->flags & CRISPY_FLAG_GDB)

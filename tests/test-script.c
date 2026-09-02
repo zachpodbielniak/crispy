@@ -3,6 +3,7 @@
 #define CRISPY_COMPILATION
 #include "../src/crispy.h"
 #include "../src/core/crispy-temp-registry-private.h"
+#include "crispy-test-cache.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -357,6 +358,83 @@ test_script_registers_temp_source(void)
 }
 
 /*
+ * test: a dry run on a warm cache still refuses to execute
+ *
+ * The DRY_RUN check sat inside the cache-miss branch, so it described a
+ * cold cache and nothing else.  The second invocation of any script is a
+ * warm one: the flag fell through, the cached module was loaded and the
+ * script's main() ran -- the single thing --dry-run exists to prevent,
+ * on the case that happens most.  A test that only compiles cold passes
+ * against that bug, so this one primes the cache with a real run first.
+ *
+ * The script writes a marker file, which makes "did it execute" a
+ * question about the filesystem rather than about output a test would
+ * have to trap.
+ */
+static void
+test_script_dry_run_warm_cache(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(CrispyScript) warm = NULL;
+    g_autoptr(CrispyScript) dry = NULL;
+    g_autofree gchar *tmpdir = NULL;
+    g_autofree gchar *marker = NULL;
+    g_autofree gchar *source = NULL;
+    g_autofree gchar *path = NULL;
+    gint exit_code;
+
+    tmpdir = g_dir_make_tmp("crispy-test-dryrun-XXXXXX", &error);
+    g_assert_no_error(error);
+
+    marker = g_build_filename(tmpdir, "it-ran", NULL);
+    source = g_strdup_printf(
+        "#include <glib.h>\n"
+        "gint main(gint argc, gchar **argv){\n"
+        "    g_file_set_contents(\"%s\", \"ran\", -1, NULL);\n"
+        "    return 0;\n"
+        "}\n",
+        marker);
+
+    path = g_build_filename(tmpdir, "script.c", NULL);
+    g_assert_true(g_file_set_contents(path, source, -1, NULL));
+
+    /* first run: no flags, so the artifact lands in the cache */
+    warm = crispy_script_new_from_file(
+        path,
+        CRISPY_COMPILER(g_compiler),
+        CRISPY_CACHE_PROVIDER(g_cache),
+        CRISPY_FLAG_NONE,
+        &error);
+    g_assert_no_error(error);
+
+    exit_code = crispy_script_execute(warm, 1, &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(exit_code, ==, 0);
+
+    /* it really did run, so the marker means what the second half reads */
+    g_assert_true(g_file_test(marker, G_FILE_TEST_EXISTS));
+    g_assert_cmpint(g_unlink(marker), ==, 0);
+
+    /* second run: same source, same flags -- a cache hit, and a dry one */
+    dry = crispy_script_new_from_file(
+        path,
+        CRISPY_COMPILER(g_compiler),
+        CRISPY_CACHE_PROVIDER(g_cache),
+        CRISPY_FLAG_DRY_RUN,
+        &error);
+    g_assert_no_error(error);
+
+    exit_code = crispy_script_execute(dry, 1, &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(exit_code, ==, 0);
+
+    g_assert_false(g_file_test(marker, G_FILE_TEST_EXISTS));
+
+    g_unlink(path);
+    g_rmdir(tmpdir);
+}
+
+/*
  * test: a script's own directory is on the include path
  *
  * Compilation happens on a stripped copy in the temp directory, so a
@@ -532,6 +610,13 @@ main(
 ){
     g_autoptr(GError) error = NULL;
 
+    /*
+     * Before g_test_init(), because g_get_user_cache_dir() caches
+     * its first answer and this suite must not compile into -- or
+     * purge -- the developer's own ~/.cache/crispy.
+     */
+    crispy_test_use_temp_cache();
+
     g_test_init(&argc, &argv, NULL);
 
     /* set up shared fixtures */
@@ -559,6 +644,8 @@ main(
                     test_script_arg_passing);
     g_test_add_func("/script/registers-temp-source",
                     test_script_registers_temp_source);
+    g_test_add_func("/script/dry-run-warm-cache",
+                    test_script_dry_run_warm_cache);
     g_test_add_func("/script/sibling-include",
                     test_script_sibling_include);
     g_test_add_func("/script/crispy-use",

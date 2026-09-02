@@ -2,6 +2,7 @@
 
 #define CRISPY_COMPILATION
 #include "../src/crispy.h"
+#include "crispy-test-cache.h"
 
 #include <glib.h>
 #include <string.h>
@@ -456,6 +457,13 @@ main(
     gchar **argv
 ){
     g_autoptr(GError) error = NULL;
+
+    /*
+     * Before g_test_init(), because g_get_user_cache_dir() caches
+     * its first answer and this suite must not compile into -- or
+     * purge -- the developer's own ~/.cache/crispy.
+     */
+    crispy_test_use_temp_cache();
 
     g_test_init(&argc, &argv, NULL);
 

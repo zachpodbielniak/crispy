@@ -349,7 +349,8 @@ crispy -S script.c
 # Compile with -pg, run, and print a gprof report
 crispy --profile script.c
 
-# Show what would be compiled without running
+# Show what would be compiled -- or, on a warm cache, which cached
+# artifact would be loaded -- without running either
 crispy --dry-run script.c
 
 # Preload a shared library before execution

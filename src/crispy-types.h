@@ -36,7 +36,9 @@ typedef struct _CrispyConfigContext    CrispyConfigContext;
  * @CRISPY_FLAG_NONE: No special flags.
  * @CRISPY_FLAG_FORCE_COMPILE: Skip cache, force recompilation (-n).
  * @CRISPY_FLAG_PRESERVE_SOURCE: Keep temp source files in /tmp (-S).
- * @CRISPY_FLAG_DRY_RUN: Show compilation command without executing (--dry-run).
+ * @CRISPY_FLAG_DRY_RUN: Describe what would be compiled, or the cache
+ *   entry that would be loaded instead, and stop without executing
+ *   (--dry-run).
  * @CRISPY_FLAG_GDB: Compile as executable with debug symbols, launch under gdb (--gdb).
  * @CRISPY_FLAG_PROFILE: Compile with profiling instrumentation (-pg) (--profile).
  * @CRISPY_FLAG_WATCH: Enable watch mode — recompile and re-execute on file changes.
