@@ -10,8 +10,8 @@
 #include "core/crispy-test-runner-private.h"
 #include "core/crispy-linter-private.h"
 #include "core/crispy-profiler-private.h"
-#include "core/crispy-use-parser-private.h"
 #include "core/crispy-source-utils-private.h"
+#include "core/crispy-temp-registry-private.h"
 #include "crispy-default-config.h"
 #include "crispy-logo.h"
 
@@ -39,9 +39,6 @@
     "You should have received a copy of the GNU Affero General Public\n" \
     "License along with this program. If not, see\n" \
     "<https://www.gnu.org/licenses/>.\n"
-
-/* global state for signal cleanup */
-static gchar *g_temp_source_path = NULL;
 
 /* --- CLI option variables --- */
 static gchar    *opt_inline       = NULL;
@@ -174,24 +171,6 @@ strip_ansi(
     }
 
     return g_string_free(out, FALSE);
-}
-
-/* --- signal handler for cleanup --- */
-static gboolean
-on_signal(
-    gpointer user_data
-){
-    (void)user_data;
-
-    if (g_temp_source_path != NULL)
-    {
-        g_unlink(g_temp_source_path);
-        g_free(g_temp_source_path);
-        g_temp_source_path = NULL;
-    }
-
-    exit(130); /* 128 + SIGINT */
-    return G_SOURCE_REMOVE;
 }
 
 /**
@@ -350,7 +329,6 @@ handle_install(
     g_autofree gchar *use_flags = NULL;
     g_autofree gchar *combined_flags = NULL;
     g_autofree gchar *installed_path = NULL;
-    g_autoptr(CrispyPkgConfigResolver) resolver = NULL;
     const gchar *path = NULL;
     const gchar *dir  = NULL;
     gsize source_len;
@@ -405,11 +383,7 @@ handle_install(
         }
     }
 
-    resolver = crispy_pkg_config_resolver_new();
-    use_flags = crispy_use_parser_resolve(
-        source,
-        CRISPY_DEPENDENCY_RESOLVER(resolver),
-        &error);
+    use_flags = crispy_source_resolve_use_flags(source, &error);
     if (use_flags == NULL && error != NULL)
     {
         g_printerr("Warning: Failed to resolve CRISPY_USE: %s\n",
@@ -453,7 +427,6 @@ handle_test(
     g_autofree gchar *params_flags = NULL;
     g_autofree gchar *use_flags = NULL;
     g_autofree gchar *combined_flags = NULL;
-    g_autoptr(CrispyPkgConfigResolver) resolver = NULL;
     const gchar *path = NULL;
     gsize source_len;
     gint result;
@@ -495,11 +468,7 @@ handle_test(
         }
     }
 
-    resolver = crispy_pkg_config_resolver_new();
-    use_flags = crispy_use_parser_resolve(
-        source,
-        CRISPY_DEPENDENCY_RESOLVER(resolver),
-        &error);
+    use_flags = crispy_source_resolve_use_flags(source, &error);
     if (use_flags == NULL && error != NULL)
     {
         g_printerr("Warning: Failed to resolve CRISPY_USE: %s\n",
@@ -542,7 +511,6 @@ handle_lint(
     g_autofree gchar *use_flags = NULL;
     g_autofree gchar *combined_flags = NULL;
     g_autofree gchar *output = NULL;
-    g_autoptr(CrispyPkgConfigResolver) resolver = NULL;
     const gchar *path = NULL;
     gsize source_len;
     gboolean clean;
@@ -575,11 +543,7 @@ handle_lint(
         }
     }
 
-    resolver = crispy_pkg_config_resolver_new();
-    use_flags = crispy_use_parser_resolve(
-        source,
-        CRISPY_DEPENDENCY_RESOLVER(resolver),
-        &error);
+    use_flags = crispy_source_resolve_use_flags(source, &error);
     if (use_flags == NULL && error != NULL)
     {
         g_printerr("Warning: Failed to resolve CRISPY_USE: %s\n",
@@ -838,6 +802,13 @@ main(
         return 0;
     }
 
+    /*
+     * Take SIGINT and SIGTERM before anything writes a temp file.  The
+     * config loader compiles too, so installing these next to the script
+     * run left a window in which Ctrl+C cleaned up nothing.
+     */
+    crispy_temp_registry_install_signal_handlers();
+
     /* create compiler and cache */
     compiler = crispy_gcc_compiler_new(&error);
     if (compiler == NULL)
@@ -1075,10 +1046,6 @@ main(
         }
     }
 
-    /* set up signal handlers for cleanup */
-    g_unix_signal_add(SIGINT, on_signal, NULL);
-    g_unix_signal_add(SIGTERM, on_signal, NULL);
-
     /* determine mode and create script */
     is_stdin = (script_argc > 0 && strcmp(script_argv[0], "-") == 0);
 
@@ -1160,8 +1127,11 @@ main(
     if (engine != NULL)
         crispy_script_set_plugin_engine(script, engine);
 
-    /* track temp source path for signal cleanup */
-    g_temp_source_path = g_strdup(crispy_script_get_temp_source_path(script));
+    /*
+     * The temp source registers itself when it is created.  Copying the
+     * path here instead read it before execute() had made the file, so
+     * the cleanup was always holding %NULL.
+     */
 
     /* execute the script */
     exit_code = crispy_script_execute(script, script_argc, script_argv, &error);
@@ -1176,14 +1146,6 @@ main(
     {
         g_printerr("Temp source preserved: %s\n",
                     crispy_script_get_temp_source_path(script));
-    }
-
-    /* handle --profile: note that gmon.out was generated */
-    if (exit_code == 0 && (flags & CRISPY_FLAG_PROFILE))
-    {
-        g_printerr("Profiling complete. gmon.out generated in current directory.\n"
-                    "Run: gprof %s gmon.out | less\n",
-                    script_argv != NULL ? script_argv[0] : "a.out");
     }
 
     /* handle --watch: enter the watch loop after the initial run */
@@ -1216,9 +1178,6 @@ cleanup:
 
     if (preloaded_lib != NULL)
         g_module_close(preloaded_lib);
-
-    g_free(g_temp_source_path);
-    g_temp_source_path = NULL;
 
     g_strfreev(crispy_argv);
     g_free(opt_inline);

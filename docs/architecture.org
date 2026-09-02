@@ -185,9 +185,24 @@ Defined in =src/core/crispy-file-cache.h/.c=. Implements =CrispyCacheProvider=.
 - Cache directory: =~/.cache/crispy/= (via =g_get_user_cache_dir()=)
 - Hash algorithm: SHA256 via =GChecksum=
 - Hash inputs: source content + NUL + extra_flags + NUL + compiler_version
-- Cached artifacts: =~/.cache/crispy/<sha256hex>.so=
-- Freshness check: cached =.so= mtime >= source file mtime (when source_path is known)
-- Purge: iterates directory, removes all =*.so= files
+- Cached artifacts: =~/.cache/crispy/<sha256hex>.so=, with the header list beside it as =<sha256hex>.d=
+- Purge: iterates the directory and removes =*.so=, =*.d= and any =.crispy-stage-*= a killed compile left behind
+
+An entry is a cache hit only when all of these hold:
+
+1. It is a *complete ELF shared object*. Existence alone is not enough: a compile that was killed, or one read while the linker was still writing, leaves a regular file newer than the script that =g_module_open()= rejects with "file too short". Before this check such an entry was a hit for ever and only =--no-cache= got past it.
+2. Its mtime is no older than the script's, when a script path is known.
+3. Every header listed in its =.d= dependency file is older than the entry. The hash covers the script text, the flags and the compiler version, and none of them changes when a header the script includes is edited -- so without this an edited header gave back the previous build, silently. The dependency file is written by the compiler backend (=gcc -MMD -MF=); an entry with no =.d= beside it is treated as fresh, which is how a backend that records nothing keeps working.
+
+*** Publishing a compiled artifact
+:PROPERTIES:
+:CUSTOM_ID: publishing-a-compiled-artifact
+:END:
+=crispy_compiler_compile_shared()= and =crispy_compiler_compile_executable()= do not hand the caller's output path to the backend. They create a staging name in that path's own directory, compile into it, and =rename()= the result into place -- atomically, since the two names share a filesystem.
+
+The cache path is what other processes load from. Handing it to gcc directly meant that a concurrent run could =g_module_open()= a file the linker had not finished: eight concurrent runs of one script against a cold cache failed in four of six rounds with "file too short" and "invalid ELF header". A failed or interrupted compile now leaves the previous entry untouched rather than replacing it with a stub.
+
+A dependency file the backend wrote beside the staged object is renamed with it, and before it, so an artifact never becomes visible without its header list.
 
 **** CrispyPluginEngine
 :PROPERTIES:
@@ -342,19 +357,26 @@ Crispy supports a C-based configuration file that is compiled and loaded using c
 :CUSTOM_ID: compiler-flag-hierarchy
 :END:
 #+begin_example
-┌─────────────────────────────────────────────────────────────┐
-│               Final gcc command line (left to right)        │
-├──────────┬──────────────┬──────────────┬───────────────────┤
-│ extra_   │ CRISPY_      │ plugin       │ override_         │
-│ flags    │ PARAMS       │ extra_flags  │ flags             │
-│          │              │              │                   │
-│ (config  │ (per-script) │ (PRE_COMPILE │ (config forced    │
-│ defaults)│              │  hook)       │  overrides)       │
-│ LOWEST   │              │              │ HIGHEST           │
-│ priority │              │              │ priority          │
-└──────────┴──────────────┴──────────────┴───────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                  Final gcc command line (left to right)              │
+├────────────┬──────────┬──────────────┬──────────────┬───────────────┤
+│ script dir │ extra_   │ CRISPY_      │ plugin       │ override_     │
+│ + CRISPY_  │ flags    │ PARAMS       │ extra_flags  │ flags         │
+│ USE        │          │              │              │               │
+│ (what the  │ (config  │ (per-script) │ (PRE_COMPILE │ (config forced│
+│ script     │ defaults)│              │  hook)       │  overrides)   │
+│ needs at   │          │              │              │               │
+│ all)       │ LOWEST   │              │              │ HIGHEST       │
+└────────────┴──────────┴──────────────┴──────────────┴───────────────┘
                     gcc last-wins semantics
 #+end_example
+
+Tier 0 is built by =build_compile_flags()= in =crispy-script.c= and covers the two things that decide how a script compiles but are written nowhere in =CRISPY_PARAMS=:
+
+- =-I<the script's own directory>=, because compilation happens on a stripped copy in the temp directory. Without it =#include "sibling.h"= could not resolve on the path that runs a script, while =crispy lint= -- which compiles the file in place -- reported the script clean.
+- the flags resolved from =#define CRISPY_USE=. =lint=, =test= and =install= each resolved it and the runner did not, so a script that linted clean failed to compile on the header it had already declared.
+
+One function builds this for both compiles crispy performs: the ordinary shared object and the executable that =--gdb= and =--profile= need.
 
 *** Config Search Path
 :PROPERTIES:
@@ -392,12 +414,27 @@ All errors use the =CRISPY_ERROR= quark with specific error codes:
 :END:
 =CrispyFlags= is a bitmask enum:
 
-| Flag                          | CLI         | Effect                                  |
-|-------------------------------+-------------+-----------------------------------------|
-| =CRISPY_FLAG_FORCE_COMPILE=   | =-n=        | Skip cache, always recompile            |
-| =CRISPY_FLAG_PRESERVE_SOURCE= | =-S=        | Keep temp source files in /tmp          |
-| =CRISPY_FLAG_DRY_RUN=         | =--dry-run= | Show compilation command only           |
-| =CRISPY_FLAG_GDB=             | =--gdb=     | Compile as executable, launch under gdb |
+| Flag                          | CLI         | Effect                                              |
+|-------------------------------+-------------+-----------------------------------------------------|
+| =CRISPY_FLAG_FORCE_COMPILE=   | =-n=        | Skip cache, always recompile                        |
+| =CRISPY_FLAG_PRESERVE_SOURCE= | =-S=        | Keep the temp source file                           |
+| =CRISPY_FLAG_DRY_RUN=         | =--dry-run= | Show compilation command only                       |
+| =CRISPY_FLAG_GDB=             | =--gdb=     | Compile as executable, launch under gdb             |
+| =CRISPY_FLAG_PROFILE=         | =--profile= | Compile as an executable with =-pg=, run it, report |
+| =CRISPY_FLAG_WATCH=           | =-w=        | Re-run the script when it changes                   |
+
+*** Temp files and signals
+:PROPERTIES:
+:CUSTOM_ID: temp-files-and-signals
+:END:
+Three places write a C file into =g_get_tmp_dir()= and remove it when they are done: =CrispyScript= (the stripped source), =CrispyRepl= (one per evaluation) and the test runner (its harness). Each registers its path with =crispy_temp_registry_add()= the moment the file exists, and the CLI installs =sigaction()= handlers that empty the registry and then let the signal kill the process.
+
+Two things made this necessary:
+
+- =g_unix_signal_add()= puts the handler on a GLib source, which runs only while something iterates the main context it was attached to. A crispy run has no main loop outside =--watch=, so SIGINT and SIGTERM were caught and never dispatched -- the process carried on with the signal bits set in =SigCgt= and nothing else happened.
+- The CLI captured the script's temp source path *before* =crispy_script_execute()= created the file, so its cleanup was always holding =NULL=.
+
+The registry is a fixed table read with atomic loads and emptied with =unlink()=, because a signal handler can neither take a lock nor wait on an allocator.
 
 ** Thread Safety
 :PROPERTIES:

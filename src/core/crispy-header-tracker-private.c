@@ -158,11 +158,30 @@ crispy_header_tracker_check_stale(
 
 gchar *
 crispy_header_tracker_get_depfile_path(
-    const gchar *cache_dir,
-    const gchar *hash
+    const gchar *artifact_path
 ){
-    g_return_val_if_fail(cache_dir != NULL, NULL);
-    g_return_val_if_fail(hash != NULL, NULL);
+    const gchar *dot;
+    const gchar *last_sep;
 
-    return g_strdup_printf("%s/%s.d", cache_dir, hash);
+    g_return_val_if_fail(artifact_path != NULL, NULL);
+
+    /*
+     * Replace the artifact's extension rather than appending to it, so a
+     * staged object and the name it is published under each map to one
+     * dependency file that the publishing rename carries across with
+     * them.  A dot inside a directory component is not an extension.
+     */
+    last_sep = strrchr(artifact_path, G_DIR_SEPARATOR);
+    dot = strrchr(artifact_path, '.');
+
+    if (dot != NULL && (last_sep == NULL || dot > last_sep) &&
+        dot != artifact_path && (last_sep == NULL || dot != last_sep + 1))
+    {
+        g_autofree gchar *stem = g_strndup(artifact_path,
+                                           (gsize)(dot - artifact_path));
+
+        return g_strconcat(stem, ".d", NULL);
+    }
+
+    return g_strconcat(artifact_path, ".d", NULL);
 }

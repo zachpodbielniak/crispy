@@ -65,8 +65,10 @@ Options:
   -I, --include HEADERS     Additional headers (semicolon-separated)
   -p, --preload LIBNAME     Preload a shared library
   -n, --no-cache            Force recompilation (skip cache)
-  -S, --source-preserve     Keep temp source files in /tmp
+  -S, --source-preserve     Keep temp source files
       --gdb                 Compile with debug symbols, launch under gdb
+      --profile             Compile with -pg, run, and print a gprof report
+  -w, --watch               Re-run the script when it changes
       --dry-run             Show compilation command without executing
       --clean-cache         Purge ~/.cache/crispy/ and exit
   -v, --version             Show version
@@ -147,18 +149,15 @@ Implement the interfaces to add custom compiler backends (clang, tcc) or cache s
 | =examples/math.c=    | CRISPY_PARAMS demo with =-lm=  |
 
 ** Tests
-35 tests across 4 test binaries using GTest:
+GTest, one binary per =tests/test-*.c=, all picked up by wildcard:
 
 #+begin_src sh
 make test
 #+end_src
 
-| Test Binary       | Tests | Coverage                                                                               |
-|-------------------+-------+----------------------------------------------------------------------------------------|
-| test-gcc-compiler | 9     | Compiler construction, version, flags, shared/executable compilation, error handling   |
-| test-file-cache   | 11    | Cache construction, hash determinism, path format, hit/miss, purge                     |
-| test-script       | 8     | File/inline execution, exit codes, CRISPY_PARAMS, shebang, compile errors, arg passing |
-| test-interfaces   | 7     | Interface types, final types, conformance checks                                       |
+The run prints each binary and each test name, which is the list -- a table here would be a second one, and the one that used to be here had drifted to naming four binaries out of twenty.
+
+Tests that compile C at runtime (=test-gcc-compiler=, =test-script=, =test-repl=) need gcc; =/script/profile= is skipped when gprof is absent.
 
 ** Documentation
 - [[file:docs/scripting.org][Script Authoring Guide]] -- how to write and run crispy scripts
@@ -166,7 +165,9 @@ make test
 - [[file:docs/api.org][API Reference]] -- complete API for all types, interfaces, and functions
 
 ** Caching
-Scripts are cached by SHA256 hash of the source content + CRISPY_PARAMS + compiler version. Cache location: =~/.cache/crispy/=.
+Scripts are cached by SHA256 hash of the source content + the script's directory + CRISPY_USE + CRISPY_PARAMS + compiler version. Cache location: =~/.cache/crispy/=.
+
+An entry is used only when it is a complete loadable object, is no older than the script, and none of the headers recorded beside it has been edited since. Compiler output is staged and renamed into place, so concurrent runs and interrupted compiles cannot leave a half-written entry behind.
 
 #+begin_src sh
 # Force recompilation

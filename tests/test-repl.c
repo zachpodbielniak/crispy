@@ -415,6 +415,41 @@ test_repl_typedef_preamble(void)
     g_assert_cmpint(result, ==, 0);
 }
 
+
+/*
+ * test: empty input does not read before the string
+ *
+ * Nothing between crispy_repl_eval() and code[strlen(code) - 1] said the
+ * string had to be non-empty, so an empty line read the byte before the
+ * allocation.  It is silent in an ordinary build and an ASan build
+ * aborts on it, which is what this test is for.
+ */
+static void
+test_repl_eval_empty(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(CrispyGccCompiler) compiler = NULL;
+    g_autoptr(CrispyFileCache) cache = NULL;
+    g_autoptr(CrispyRepl) repl = NULL;
+    gint result;
+
+    compiler = crispy_gcc_compiler_new(&error);
+    g_assert_no_error(error);
+    cache = crispy_file_cache_new();
+
+    repl = crispy_repl_new(CRISPY_COMPILER(compiler),
+                           CRISPY_CACHE_PROVIDER(cache));
+
+    result = crispy_repl_eval(repl, "", &error);
+    g_assert_cmpint(result, >=, 0);
+    g_clear_error(&error);
+
+    /* whitespace only takes the same path with nothing to compile */
+    result = crispy_repl_eval(repl, "   ", &error);
+    g_assert_cmpint(result, >=, 0);
+    g_clear_error(&error);
+}
+
 gint
 main(
     gint    argc,
@@ -464,6 +499,8 @@ main(
                     test_repl_eval_signal);
     g_test_add_func("/repl/extra-flags",
                     test_repl_extra_flags);
+    g_test_add_func("/repl/eval-empty",
+                    test_repl_eval_empty);
     g_test_add_func("/repl/typedef-preamble",
                     test_repl_typedef_preamble);
 

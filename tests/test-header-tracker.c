@@ -41,19 +41,30 @@ set_mtime(
     utime(path, &times);
 }
 
-/* test: get_depfile_path returns expected format */
+/* test: get_depfile_path replaces the artifact's extension */
 static void
 test_get_depfile_path(void)
 {
     g_autofree gchar *path = NULL;
+    g_autofree gchar *staged = NULL;
+    g_autofree gchar *no_ext = NULL;
 
-    path = crispy_header_tracker_get_depfile_path("/var/cache/crispy",
-                                                  "abc123");
+    path = crispy_header_tracker_get_depfile_path(
+        "/var/cache/crispy/abc123.so");
+    g_assert_cmpstr(path, ==, "/var/cache/crispy/abc123.d");
 
-    g_assert_nonnull(path);
-    g_assert_true(strstr(path, "/var/cache/crispy") != NULL);
-    g_assert_true(strstr(path, "abc123") != NULL);
-    g_assert_true(g_str_has_suffix(path, ".d"));
+    /*
+     * A staged artifact must map to a name of its own, or two publishes
+     * of the same hash would fight over one dependency file.
+     */
+    staged = crispy_header_tracker_get_depfile_path(
+        "/var/cache/crispy/.crispy-stage-AB12CD-abc123.so");
+    g_assert_cmpstr(staged, ==,
+                    "/var/cache/crispy/.crispy-stage-AB12CD-abc123.d");
+
+    /* nothing to replace: append rather than eat a directory's dot */
+    no_ext = crispy_header_tracker_get_depfile_path("/tmp/.crispy-dbg-7");
+    g_assert_cmpstr(no_ext, ==, "/tmp/.crispy-dbg-7.d");
 }
 
 /* test: parse a simple single-line depfile */

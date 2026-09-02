@@ -4,11 +4,13 @@
 #define CRISPY_COMPILATION
 #endif
 #include "crispy-file-cache.h"
+#include "crispy-header-tracker-private.h"
 #include "../interfaces/crispy-cache-provider.h"
 #include "../crispy-types.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <elf.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -18,9 +20,22 @@
  * @short_description: Filesystem implementation of CrispyCacheProvider
  *
  * #CrispyFileCache stores compiled shared objects in `~/.cache/crispy/`
- * using SHA256 content hashes as filenames. It validates cache entries
- * by checking both existence and mtime relative to the source file.
+ * using SHA256 content hashes as filenames. An entry is valid when it is
+ * a complete ELF shared object, is no older than the script it was built
+ * from, and none of the headers recorded in its dependency file have
+ * changed since.
  */
+
+/*
+ * The byte order this process can load.  elf.h names the two encodings
+ * but not which one is ours, and a module in the other one is unloadable
+ * whatever else is right about it.
+ */
+#if G_BYTE_ORDER == G_LITTLE_ENDIAN
+#define CRISPY_ELF_NATIVE_DATA ELFDATA2LSB
+#else
+#define CRISPY_ELF_NATIVE_DATA ELFDATA2MSB
+#endif
 
 struct _CrispyFileCache
 {
@@ -106,6 +121,143 @@ file_cache_get_path(
     return g_build_filename(priv->cache_dir, filename, NULL);
 }
 
+/*
+ * artifact_is_complete_module:
+ * @path: path to a cached artifact
+ *
+ * Answers whether @path holds a whole ELF shared object rather than the
+ * front of one.
+ *
+ * Existence was the whole test before, and a file that exists is not a
+ * file that loads: a compile killed part-way, or read by another process
+ * while the linker was still writing, leaves a stub that is newer than
+ * the script and therefore "valid" for ever.  Every later run then died
+ * with "file too short" or "invalid ELF header" from g_module_open(),
+ * and only --no-cache got past it, which nothing said.  Rejecting the
+ * stub here lets the next run rebuild it.
+ *
+ * The section header table sits at the end of a linked object, so
+ * requiring the file to reach past it is what catches truncation.
+ *
+ * Returns: %TRUE if @path is a loadable shared object
+ */
+static gboolean
+artifact_is_complete_module(
+    const gchar *path
+){
+    guchar header[sizeof(Elf64_Ehdr)];
+    GStatBuf st;
+    FILE *fp;
+    gsize want;
+    gsize read_len;
+    gint64 needed;
+    gboolean ok;
+
+    if (g_stat(path, &st) != 0)
+        return FALSE;
+
+    fp = g_fopen(path, "rb");
+    if (fp == NULL)
+        return FALSE;
+
+    memset(header, 0, sizeof(header));
+    read_len = fread(header, 1, sizeof(header), fp);
+    fclose(fp);
+
+    if (read_len < EI_NIDENT)
+        return FALSE;
+
+    if (memcmp(header, ELFMAG, SELFMAG) != 0)
+        return FALSE;
+
+    /*
+     * A module built for another word size or byte order is not one this
+     * process can load, and its e_shoff cannot be read with the native
+     * struct either -- so refuse it rather than measuring it wrongly.
+     */
+    if (header[EI_DATA] != CRISPY_ELF_NATIVE_DATA)
+        return FALSE;
+
+    ok = FALSE;
+    needed = 0;
+
+    if (header[EI_CLASS] == ELFCLASS64)
+    {
+        Elf64_Ehdr ehdr;
+
+        want = sizeof(Elf64_Ehdr);
+        if (read_len < want)
+            return FALSE;
+
+        memcpy(&ehdr, header, want);
+        if (ehdr.e_type != ET_DYN && ehdr.e_type != ET_EXEC)
+            return FALSE;
+
+        needed = (gint64)ehdr.e_shoff +
+                 (gint64)ehdr.e_shnum * (gint64)ehdr.e_shentsize;
+        ok = TRUE;
+    }
+    else if (header[EI_CLASS] == ELFCLASS32)
+    {
+        Elf32_Ehdr ehdr;
+
+        want = sizeof(Elf32_Ehdr);
+        if (read_len < want)
+            return FALSE;
+
+        memcpy(&ehdr, header, want);
+        if (ehdr.e_type != ET_DYN && ehdr.e_type != ET_EXEC)
+            return FALSE;
+
+        needed = (gint64)ehdr.e_shoff +
+                 (gint64)ehdr.e_shnum * (gint64)ehdr.e_shentsize;
+        ok = TRUE;
+    }
+
+    if (!ok)
+        return FALSE;
+
+    return (gint64)st.st_size >= needed;
+}
+
+/*
+ * headers_still_fresh:
+ * @so_path: path to the cached artifact
+ * @reference_time: the artifact's own modification time
+ *
+ * Answers whether every header the artifact was compiled against is
+ * older than the artifact itself.
+ *
+ * An artifact with no dependency file beside it says nothing about its
+ * headers, which is the answer for a backend that records none; it is
+ * treated as fresh so an unknown backend behaves as it did before.
+ *
+ * Returns: %TRUE if no recorded header is newer than @reference_time
+ */
+static gboolean
+headers_still_fresh(
+    const gchar *so_path,
+    gint64       reference_time
+){
+    g_autofree gchar *depfile = NULL;
+    GPtrArray *deps;
+    gboolean stale;
+
+    depfile = crispy_header_tracker_get_depfile_path(so_path);
+
+    if (!g_file_test(depfile, G_FILE_TEST_IS_REGULAR))
+        return TRUE;
+
+    deps = NULL;
+    if (!crispy_header_tracker_parse_depfile(depfile, &deps, NULL))
+        return TRUE;
+
+    stale = crispy_header_tracker_check_stale(deps, reference_time);
+    g_ptr_array_unref(deps);
+
+    return !stale;
+}
+
 static gboolean
 file_cache_has_valid(
     CrispyCacheProvider *self,
@@ -122,14 +274,36 @@ file_cache_has_valid(
     if (!g_file_test(so_path, G_FILE_TEST_IS_REGULAR))
         return FALSE;
 
-    /* if no source path, existence is sufficient (inline/stdin) */
-    if (source_path == NULL)
-        return TRUE;
+    /* a truncated or half-written entry is not a cache hit */
+    if (!artifact_is_complete_module(so_path))
+        return FALSE;
 
-    /* compare mtime: cached .so must be newer than source */
     if (g_stat(so_path, &so_stat) != 0)
         return FALSE;
 
+    /*
+     * Headers are checked whether or not there is a script on disk: an
+     * inline snippet or a REPL line can include a header of its own, and
+     * the hash covers the text that named it, never the file it named.
+     */
+    if (!headers_still_fresh(so_path, (gint64)so_stat.st_mtime))
+        return FALSE;
+
+    /* if no source path, the artifact stands on its own (inline/stdin) */
+    if (source_path == NULL)
+        return TRUE;
+
+    /*
+     * Compare mtime: the cached artifact must be at least as new as the
+     * source.
+     *
+     * st_mtime is whole seconds, so an edit made in the same second as
+     * the compile is not seen -- by this check or by the header one
+     * above, which uses the same clock deliberately rather than a finer
+     * one, so the two cannot disagree about the same edit.  Editing and
+     * re-running inside one second reuses the cache; `--no-cache` is the
+     * escape, and a second later the change is picked up normally.
+     */
     if (g_stat(source_path, &src_stat) != 0)
         return FALSE;
 
@@ -155,7 +329,14 @@ file_cache_purge(
     count = 0;
     while ((entry = g_dir_read_name(dir)) != NULL)
     {
-        if (g_str_has_suffix(entry, ".so"))
+        /*
+         * Dependency files and the staging names a killed compile left
+         * behind belong to the cache too; purging only the objects would
+         * leave the directory growing after every interrupted run.
+         */
+        if (g_str_has_suffix(entry, ".so") ||
+            g_str_has_suffix(entry, ".d") ||
+            g_str_has_prefix(entry, ".crispy-stage-"))
         {
             g_autofree gchar *path = NULL;
 

@@ -88,8 +88,17 @@ gchar *crispy_cache_provider_get_path (CrispyCacheProvider *self,
  * @source_path: (nullable): original source file path for freshness check
  *
  * Checks if a valid cached artifact exists for the given hash.
- * If @source_path is provided, also verifies the cached artifact
- * is not stale relative to the source file.
+ *
+ * "Valid" is more than "present": an implementation is expected to
+ * reject an entry it cannot load, since a compile that was killed or
+ * read while it was still being written leaves a regular file that is
+ * newer than everything and loads as "file too short" for ever.
+ *
+ * If @source_path is provided, the entry must also be no older than the
+ * source file.  Headers are separate: the source's own timestamp says
+ * nothing about a header it includes, so an implementation that keeps a
+ * record of the headers an entry was built from is expected to consult
+ * it whether or not @source_path is given.
  *
  * Returns: %TRUE if a valid cache entry exists, %FALSE otherwise
  */

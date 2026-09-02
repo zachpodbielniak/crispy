@@ -47,16 +47,20 @@ gboolean crispy_header_tracker_check_stale (GPtrArray *deps,
 
 /**
  * crispy_header_tracker_get_depfile_path:
- * @cache_dir: the cache directory path
- * @hash: the source hash used for the cached artifact
+ * @artifact_path: path to a compiled artifact (a cached .so, or the
+ *   staging name a compile is about to publish from)
  *
- * Returns the path where the .d dependency file should be stored
- * alongside the cached .so file.
+ * Returns the path of the dependency file that belongs to @artifact_path:
+ * the artifact's own name with any extension replaced by `.d`.
+ *
+ * This is the one spelling of that name.  The compiler writes the
+ * dependency file beside the artifact it just built and the cache reads
+ * it back to decide whether an included header has changed since; two
+ * private copies of the rule would be two answers to one question.
  *
  * Returns: (transfer full): the .d file path
  */
-gchar *crispy_header_tracker_get_depfile_path (const gchar *cache_dir,
-                                               const gchar *hash);
+gchar *crispy_header_tracker_get_depfile_path (const gchar *artifact_path);
 
 G_END_DECLS
 

@@ -82,6 +82,15 @@ const gchar *crispy_compiler_get_base_flags (CrispyCompiler *self);
  * Compiles the source file to a shared object suitable for loading
  * with g_module_open().
  *
+ * The backend writes to a staging name in @output_path's directory and
+ * the finished object is renamed into place, so a process loading
+ * @output_path sees either the previous artifact or the complete new one
+ * and never a file the linker is still writing.  A failed compile leaves
+ * @output_path untouched.
+ *
+ * A dependency file the backend writes beside its output is published
+ * with it, under @output_path's name with the extension replaced by `.d`.
+ *
  * Returns: %TRUE on success, %FALSE on error
  */
 gboolean crispy_compiler_compile_shared (CrispyCompiler  *self,
@@ -99,7 +108,10 @@ gboolean crispy_compiler_compile_shared (CrispyCompiler  *self,
  * @error: return location for a #GError, or %NULL
  *
  * Compiles the source file to a standalone executable with debug symbols.
- * Used for --gdb mode to allow debugging with gdb.
+ * Used for --gdb and --profile mode, and by `crispy install`.
+ *
+ * As with crispy_compiler_compile_shared(), the result is staged and
+ * renamed into place, so @output_path is never a partially written file.
  *
  * Returns: %TRUE on success, %FALSE on error
  */

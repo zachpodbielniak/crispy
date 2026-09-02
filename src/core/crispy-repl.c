@@ -27,6 +27,7 @@
 #endif
 #include "crispy-repl.h"
 #include "crispy-script.h"
+#include "crispy-temp-registry-private.h"
 #include "../interfaces/crispy-compiler.h"
 #include "../interfaces/crispy-cache-provider.h"
 #include "../crispy-types.h"
@@ -395,6 +396,38 @@ compute_depth_delta(
 /* ------------------------------------------------------------------ */
 
 /*
+ * text_ends_with_newline:
+ * @text: (nullable): the text to inspect
+ *
+ * Answers whether @text already ends in a newline, so the caller knows
+ * whether to add one.
+ *
+ * Three of the six places that asked this read text[strlen(text) - 1]
+ * with nothing between them and an empty string, which reads the byte
+ * before the allocation: `:load` on an empty file reaches one, and
+ * crispy_repl_eval(repl, "") reaches another.  The other three tested
+ * for an empty string first -- so the rule was known, and applied to the
+ * call sites somebody looked at rather than to the question itself.
+ *
+ * Returns: %TRUE if @text is non-empty and its last character is a newline
+ */
+static gboolean
+text_ends_with_newline(
+    const gchar *text
+){
+    gsize len;
+
+    if (text == NULL)
+        return FALSE;
+
+    len = strlen(text);
+    if (len == 0)
+        return FALSE;
+
+    return text[len - 1] == '\n';
+}
+
+/*
  * is_preamble_code:
  * @code: trimmed C code
  *
@@ -614,7 +647,7 @@ build_eval_source(
     if (preamble != NULL && preamble[0] != '\0')
     {
         g_string_append(src, preamble);
-        if (preamble[strlen(preamble) - 1] != '\n')
+        if (!text_ends_with_newline(preamble))
             g_string_append_c(src, '\n');
     }
 
@@ -643,7 +676,7 @@ build_eval_source(
         g_string_append(src, code);
 
         /* append trailing newline if needed */
-        if (code[strlen(code) - 1] != '\n')
+        if (!text_ends_with_newline(code))
             g_string_append_c(src, '\n');
 
         /* add return 0 if user code doesn't already return */
@@ -679,7 +712,7 @@ build_string_print_source(
     if (preamble != NULL && preamble[0] != '\0')
     {
         g_string_append(src, preamble);
-        if (preamble[strlen(preamble) - 1] != '\n')
+        if (!text_ends_with_newline(preamble))
             g_string_append_c(src, '\n');
     }
 
@@ -715,7 +748,7 @@ build_pointer_print_source(
     if (preamble != NULL && preamble[0] != '\0')
     {
         g_string_append(src, preamble);
-        if (preamble[strlen(preamble) - 1] != '\n')
+        if (!text_ends_with_newline(preamble))
             g_string_append_c(src, '\n');
     }
 
@@ -756,8 +789,13 @@ try_compile_source(
     gssize            written;
 
     /* write source to temp file */
-    temp_path = g_strdup_printf("/tmp/crispy-repl-%u-XXXXXX.c",
-                                self->eval_count);
+    {
+        g_autofree gchar *name = NULL;
+
+        name = g_strdup_printf("crispy-repl-%u-XXXXXX.c", self->eval_count);
+        temp_path = g_build_filename(g_get_tmp_dir(), name, NULL);
+    }
+
     fd = g_mkstemp(temp_path);
     if (fd < 0)
     {
@@ -766,12 +804,16 @@ try_compile_source(
         return NULL;
     }
 
+    /* a Ctrl+C in the middle of an evaluation must not leave it behind */
+    crispy_temp_registry_add(temp_path);
+
     src_len = strlen(source);
     written = write(fd, source, src_len);
     close(fd);
 
     if (written < 0 || (gsize)written != src_len)
     {
+        crispy_temp_registry_remove(temp_path);
         g_unlink(temp_path);
         g_set_error(error, CRISPY_ERROR, CRISPY_ERROR_IO,
                     "Failed to write REPL source to temp file");
@@ -800,6 +842,7 @@ try_compile_source(
                                             error))
         {
             g_free(hash);
+            crispy_temp_registry_remove(temp_path);
             g_unlink(temp_path);
             g_free(so_path);
             return NULL;
@@ -807,6 +850,7 @@ try_compile_source(
     }
 
     g_free(hash);
+    crispy_temp_registry_remove(temp_path);
     g_unlink(temp_path);
     return so_path;
 }
@@ -962,7 +1006,7 @@ crispy_repl_eval(
     if (is_preamble_code(code))
     {
         g_string_append(self->preamble, code);
-        if (code[strlen(code) - 1] != '\n')
+        if (!text_ends_with_newline(code))
             g_string_append_c(self->preamble, '\n');
 
         g_signal_emit(self, obj_signals[SIGNAL_LINE_EVALUATED],
@@ -1217,7 +1261,7 @@ handle_meta_command(
         }
 
         g_string_append(self->preamble, contents);
-        if (contents[strlen(contents) - 1] != '\n')
+        if (!text_ends_with_newline(contents))
             g_string_append_c(self->preamble, '\n');
 
         g_print("Loaded %s into preamble.\n", path);

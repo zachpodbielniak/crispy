@@ -148,6 +148,8 @@ crispy_installer_install (const gchar     *source_path,
     g_autofree gchar *output_path = NULL;
     g_autofree gchar *tmp_source = NULL;
     g_autofree gchar *tmp_binary = NULL;
+    g_autofree gchar *include_flag = NULL;
+    g_autofree gchar *all_flags = NULL;
 
     g_return_val_if_fail(source_path != NULL, NULL);
     g_return_val_if_fail(CRISPY_IS_COMPILER(compiler), NULL);
@@ -216,10 +218,24 @@ crispy_installer_install (const gchar     *source_path,
         g_unlink(tmp_binary);
     }
 
+    /*
+     * The stripped copy is compiled from the temp directory, so a quoted
+     * include of a header sitting beside the script needs to be told
+     * where the script is.  Same rule as the script runner and the test
+     * runner, which compile a copy for the same reason.
+     */
+    include_flag = crispy_source_include_flag_for(source_path);
+    if (include_flag != NULL && extra_flags != NULL && extra_flags[0] != '\0')
+        all_flags = g_strconcat(include_flag, " ", extra_flags, NULL);
+    else if (include_flag != NULL)
+        all_flags = g_strdup(include_flag);
+    else
+        all_flags = g_strdup(extra_flags);
+
     if (!crispy_compiler_compile_executable(compiler,
                                             tmp_source,
                                             tmp_binary,
-                                            extra_flags,
+                                            all_flags,
                                             error))
     {
         g_unlink(tmp_source);

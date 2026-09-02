@@ -15,6 +15,7 @@
 #endif
 #include "crispy-test-runner-private.h"
 #include "crispy-source-utils-private.h"
+#include "crispy-temp-registry-private.h"
 #include "../interfaces/crispy-compiler.h"
 #include "../interfaces/crispy-cache-provider.h"
 #include "../crispy-types.h"
@@ -196,6 +197,7 @@ crispy_test_runner_run(
     gchar            *so_path;
     gchar            *hash;
     gchar            *compile_flags;
+    gchar            *include_flag;
     GModule          *module;
     CrispyMainFunc    main_func;
     gint              result;
@@ -215,6 +217,7 @@ crispy_test_runner_run(
     so_path          = NULL;
     hash             = NULL;
     compile_flags    = NULL;
+    include_flag     = NULL;
     module           = NULL;
     expanded_params  = NULL;
     result           = -1;
@@ -255,11 +258,24 @@ crispy_test_runner_run(
     harness_source = crispy_test_runner_generate_harness(
         modified_source, test_names, test_count);
 
+    /*
+     * The harness is compiled from the temp directory, not from where
+     * the script lives, so a quoted include of a sibling header has to
+     * be told where "beside the script" is.
+     */
+    include_flag = crispy_source_include_flag_for(source_path);
+
     /* [5] Compute cache hash over harness source + flags */
     {
         GString *hash_input;
 
         hash_input = g_string_new(NULL);
+
+        if (include_flag != NULL)
+        {
+            g_string_append(hash_input, include_flag);
+            g_string_append_c(hash_input, ' ');
+        }
 
         if (extra_flags != NULL && extra_flags[0] != '\0')
         {
@@ -285,8 +301,10 @@ crispy_test_runner_run(
     so_path = crispy_cache_provider_get_path(cache, hash);
 
     /* [6] Write harness to temp file */
-    temp_path = g_strdup("/tmp/crispy-test-XXXXXX.c");
+    temp_path = g_build_filename(g_get_tmp_dir(), "crispy-test-XXXXXX.c", NULL);
     fd = g_mkstemp(temp_path);
+    if (fd >= 0)
+        crispy_temp_registry_add(temp_path);
     if (fd < 0)
     {
         g_set_error(error,
@@ -320,8 +338,15 @@ crispy_test_runner_run(
 
         flags_buf = g_string_new(NULL);
 
+        if (include_flag != NULL)
+            g_string_append(flags_buf, include_flag);
+
         if (extra_flags != NULL && extra_flags[0] != '\0')
+        {
+            if (flags_buf->len > 0)
+                g_string_append_c(flags_buf, ' ');
             g_string_append(flags_buf, extra_flags);
+        }
 
         if (expanded_params != NULL && expanded_params[0] != '\0')
         {
@@ -386,9 +411,12 @@ cleanup:
 
     if (temp_path != NULL)
     {
+        crispy_temp_registry_remove(temp_path);
         g_unlink(temp_path);
         g_free(temp_path);
     }
+
+    g_free(include_flag);
 
     if (test_names != NULL)
     {

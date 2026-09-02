@@ -5,6 +5,8 @@
 #endif
 #include "crispy-script.h"
 #include "crispy-source-utils-private.h"
+#include "crispy-temp-registry-private.h"
+#include "crispy-profiler-private.h"
 #include "crispy-plugin-engine.h"
 #include "crispy-plugin-engine-private.h"
 #include "../interfaces/crispy-compiler.h"
@@ -50,6 +52,8 @@ typedef struct
 
     gchar       *crispy_params;     /* extracted CRISPY_PARAMS value */
     gchar       *expanded_params;   /* shell-expanded CRISPY_PARAMS */
+    gchar       *use_flags;         /* flags resolved from CRISPY_USE */
+    gchar       *include_flag;      /* -I<script's own directory> */
     gchar       *modified_source;   /* source with shebang + CRISPY_PARAMS removed */
     gsize        modified_len;
 
@@ -109,7 +113,12 @@ write_temp_source(
     gint fd;
     gchar *tmpl;
 
-    tmpl = g_strdup("/tmp/crispy-XXXXXX.c");
+    /*
+     * g_get_tmp_dir() rather than a literal /tmp, so a caller that has
+     * set TMPDIR -- a build that keeps its scratch out of a shared
+     * directory, a sandbox with no /tmp at all -- is honoured.
+     */
+    tmpl = g_build_filename(g_get_tmp_dir(), "crispy-XXXXXX.c", NULL);
 
     /* g_mkstemp modifies tmpl in-place with the actual filename */
     fd = g_mkstemp(tmpl);
@@ -125,6 +134,13 @@ write_temp_source(
     }
 
     priv->temp_source_path = tmpl;
+
+    /*
+     * Register it now that it exists.  The CLI used to snapshot this
+     * path before execute() ran, so its signal cleanup was always
+     * holding %NULL and an interrupted run left the file behind.
+     */
+    crispy_temp_registry_add(priv->temp_source_path);
 
     /* write the modified source */
     {
@@ -254,10 +270,12 @@ crispy_script_finalize(
         g_module_close(priv->module);
 
     /* clean up temp file unless preserve flag is set */
-    if (priv->temp_source_path != NULL &&
-        !(priv->flags & CRISPY_FLAG_PRESERVE_SOURCE))
+    if (priv->temp_source_path != NULL)
     {
-        g_unlink(priv->temp_source_path);
+        crispy_temp_registry_remove(priv->temp_source_path);
+
+        if (!(priv->flags & CRISPY_FLAG_PRESERVE_SOURCE))
+            g_unlink(priv->temp_source_path);
     }
 
     g_clear_object(&priv->compiler);
@@ -268,6 +286,8 @@ crispy_script_finalize(
     g_free(priv->source_content);
     g_free(priv->crispy_params);
     g_free(priv->expanded_params);
+    g_free(priv->use_flags);
+    g_free(priv->include_flag);
     g_free(priv->modified_source);
     g_free(priv->temp_source_path);
     g_free(priv->hash);
@@ -527,6 +547,207 @@ populate_hook_context(
     ctx->error            = error;
 }
 
+/*
+ * build_compile_flags:
+ * @priv: script private data with params, use flags and include flag set
+ * @plugin_extra_flags: (nullable): flags a PRE_COMPILE hook contributed
+ *
+ * Assembles the compiler flags for this script.
+ *
+ * gcc takes the last of two conflicting flags, so the order is the
+ * precedence:
+ *
+ *   0. the script's own directory and CRISPY_USE -- what the script
+ *      needs merely to compile at all
+ *   1. config extra_flags    (defaults, lowest priority)
+ *   2. CRISPY_PARAMS         (script-level overrides)
+ *   3. plugin extra_flags    (from the PRE_COMPILE hook)
+ *   4. config override_flags (forced, highest priority)
+ *
+ * One function because there are two compiles here: the ordinary one and
+ * the executable --gdb builds.  The second was handed CRISPY_PARAMS
+ * alone, so a script that ran would fail to build under --gdb the moment
+ * anything else contributed a flag.
+ *
+ * Returns: (transfer full): the flag string, possibly empty
+ */
+static gchar *
+build_compile_flags(
+    CrispyScriptPrivate *priv,
+    const gchar         *plugin_extra_flags
+){
+    GString *flags_buf;
+
+    flags_buf = g_string_new(NULL);
+
+    /*
+     * tier 0: the script's own directory first, so a quoted include
+     * finds the script's sibling before a later -I can shadow it
+     */
+    if (priv->include_flag != NULL)
+        g_string_append(flags_buf, priv->include_flag);
+
+    if (priv->use_flags != NULL && priv->use_flags[0] != '\0')
+    {
+        if (flags_buf->len > 0)
+            g_string_append_c(flags_buf, ' ');
+        g_string_append(flags_buf, priv->use_flags);
+    }
+
+    /* tier 1: config extra_flags (defaults) */
+    if (priv->config_extra_flags != NULL &&
+        priv->config_extra_flags[0] != '\0')
+    {
+        if (flags_buf->len > 0)
+            g_string_append_c(flags_buf, ' ');
+        g_string_append(flags_buf, priv->config_extra_flags);
+    }
+
+    /* tier 2: script's own CRISPY_PARAMS */
+    if (priv->expanded_params != NULL &&
+        priv->expanded_params[0] != '\0')
+    {
+        if (flags_buf->len > 0)
+            g_string_append_c(flags_buf, ' ');
+        g_string_append(flags_buf, priv->expanded_params);
+    }
+
+    /* tier 3: plugin-injected extra_flags */
+    if (plugin_extra_flags != NULL && plugin_extra_flags[0] != '\0')
+    {
+        if (flags_buf->len > 0)
+            g_string_append_c(flags_buf, ' ');
+        g_string_append(flags_buf, plugin_extra_flags);
+    }
+
+    /* tier 4: config override_flags (highest priority) */
+    if (priv->config_override_flags != NULL &&
+        priv->config_override_flags[0] != '\0')
+    {
+        if (flags_buf->len > 0)
+            g_string_append_c(flags_buf, ' ');
+        g_string_append(flags_buf, priv->config_override_flags);
+    }
+
+    return g_string_free(flags_buf, FALSE);
+}
+
+/*
+ * run_profiled:
+ * @priv: script private data, with the temp source already written
+ * @argc: script argument count
+ * @argv: script argument vector
+ * @error: return location for a #GError, or %NULL
+ *
+ * Compiles the script as a standalone executable with -pg, runs it, and
+ * prints gprof's report.
+ *
+ * --profile used to set a flag that was read in exactly one place, to
+ * print "Profiling complete. gmon.out generated in current directory."
+ * No -pg was ever passed and no gmon.out was ever written, so the one
+ * thing the option did was claim to have worked.
+ *
+ * A separate executable rather than the usual shared object, because -pg
+ * cannot work in one: the counters are started by monstartup() and
+ * written by _mcleanup(), both of which come from gcrt1.o and are linked
+ * only into an executable.  A .so built with -pg has the mcount calls
+ * and nothing to record them, which is why the option could not have
+ * been made to work where it stood.
+ *
+ * The script therefore runs in a child process: the module-load and
+ * execute hooks a plugin would see on an ordinary run do not fire here,
+ * and the script's argv[0] is the executable rather than its own path.
+ *
+ * Returns: the script's exit code, or -1 on error
+ */
+static gint
+run_profiled(
+    CrispyScriptPrivate  *priv,
+    gint                  argc,
+    gchar               **argv,
+    GError              **error
+){
+    g_autofree gchar *exe_path = NULL;
+    g_autofree gchar *base_flags = NULL;
+    g_autofree gchar *profile_flags = NULL;
+    g_autofree gchar *report = NULL;
+    g_auto(GStrv) child_argv = NULL;
+    GError *gprof_error = NULL;
+    gint child_status;
+    gint i;
+
+    exe_path = g_strdup_printf("%s%ccrispy-prof-%d",
+                               g_get_tmp_dir(), G_DIR_SEPARATOR, getpid());
+
+    base_flags = build_compile_flags(priv, NULL);
+    profile_flags = g_strconcat(base_flags,
+                                base_flags[0] != '\0' ? " " : "",
+                                crispy_profiler_get_flags(),
+                                NULL);
+
+    if (!crispy_compiler_compile_executable(priv->compiler,
+                                            priv->temp_source_path,
+                                            exe_path,
+                                            profile_flags,
+                                            error))
+    {
+        return -1;
+    }
+
+    crispy_temp_registry_add(exe_path);
+
+    /*
+     * argv[0] has to be the executable for it to run at all; the script's
+     * own arguments follow, in the order it would have seen them.
+     */
+    child_argv = g_new0(gchar *, (gsize)argc + 1);
+    child_argv[0] = g_strdup(exe_path);
+    for (i = 1; i < argc; i++)
+        child_argv[i] = g_strdup(argv[i]);
+
+    /*
+     * No pipes: the script's own output belongs on the terminal, and
+     * glibc writes gmon.out into the working directory at exit, which is
+     * the one the caller is standing in.
+     */
+    child_status = 0;
+    if (!g_spawn_sync(NULL, child_argv, NULL,
+                      G_SPAWN_CHILD_INHERITS_STDIN,
+                      NULL, NULL, NULL, NULL, &child_status, error))
+    {
+        crispy_temp_registry_remove(exe_path);
+        g_unlink(exe_path);
+        return -1;
+    }
+
+    if (!crispy_profiler_run_gprof(exe_path, NULL, &report, &gprof_error))
+    {
+        /*
+         * A missing or unhappy gprof is not a failure of the script that
+         * just ran, and reporting it as one would hide the script's own
+         * exit code.  Say what went wrong and keep the result.
+         */
+        g_warning("Profiling ran but gprof did not: %s",
+                  gprof_error != NULL ? gprof_error->message : "unknown error");
+        g_clear_error(&gprof_error);
+    }
+    else if (report != NULL)
+    {
+        g_print("%s", report);
+    }
+
+    crispy_profiler_cleanup(NULL);
+    crispy_temp_registry_remove(exe_path);
+    g_unlink(exe_path);
+
+    if (g_spawn_check_wait_status(child_status, NULL))
+        priv->exit_code = 0;
+    else
+        priv->exit_code = 1;
+
+    return priv->exit_code;
+}
+
 /* --- execution --- */
 
 gint
@@ -578,6 +799,41 @@ crispy_script_execute(
     priv->expanded_params = shell_expand(priv->crispy_params, error);
     if (priv->expanded_params == NULL)
         return -1;
+
+    /*
+     * Resolve the two things about a script that decide how it compiles
+     * but are not written in CRISPY_PARAMS: the packages it declared
+     * with CRISPY_USE, and its own directory.
+     *
+     * This is the path that actually runs a script, and it was the only
+     * one of the four that did neither -- so `crispy lint use.c` was
+     * clean and `crispy use.c` died on the header the script had already
+     * declared, with the tool that reported it healthy being the wrong
+     * one.
+     */
+    if (priv->use_flags == NULL)
+    {
+        GError *use_error = NULL;
+
+        priv->use_flags = crispy_source_resolve_use_flags(
+            priv->source_content, &use_error);
+        if (priv->use_flags == NULL && use_error != NULL)
+        {
+            /*
+             * A package pkg-config cannot see is not fatal: the compile
+             * may well succeed without it, and refusing here would stop
+             * a script that runs today.  Say so and carry on, which is
+             * what lint, test and install already do.
+             */
+            g_warning("Failed to resolve CRISPY_USE: %s",
+                      use_error->message);
+            g_error_free(use_error);
+        }
+    }
+
+    if (priv->include_flag == NULL)
+        priv->include_flag = crispy_source_include_flag_for(priv->source_path);
+
     ctx.time_param_expand = g_get_monotonic_time() - t_phase;
 
     populate_hook_context(priv, &ctx, NULL, FALSE, argc, argv, error);
@@ -599,10 +855,22 @@ crispy_script_execute(
     {
         g_autoptr(GString) hash_flags = g_string_new(NULL);
 
+        if (priv->include_flag != NULL)
+        {
+            g_string_append(hash_flags, priv->include_flag);
+            g_string_append_c(hash_flags, ' ');
+        }
+
         if (priv->config_extra_flags != NULL &&
             priv->config_extra_flags[0] != '\0')
         {
             g_string_append(hash_flags, priv->config_extra_flags);
+            g_string_append_c(hash_flags, ' ');
+        }
+
+        if (priv->use_flags != NULL && priv->use_flags[0] != '\0')
+        {
+            g_string_append(hash_flags, priv->use_flags);
             g_string_append_c(hash_flags, ' ');
         }
 
@@ -641,7 +909,8 @@ crispy_script_execute(
     t_phase = g_get_monotonic_time();
     cache_hit = FALSE;
     if (!(priv->flags & CRISPY_FLAG_FORCE_COMPILE) &&
-        !(priv->flags & CRISPY_FLAG_GDB))
+        !(priv->flags & CRISPY_FLAG_GDB) &&
+        !(priv->flags & CRISPY_FLAG_PROFILE))
     {
         cache_hit = crispy_cache_provider_has_valid(
             priv->cache, priv->hash, priv->source_path);
@@ -665,10 +934,14 @@ crispy_script_execute(
         /* dry-run: just show what would happen */
         if (priv->flags & CRISPY_FLAG_DRY_RUN)
         {
+            g_autofree gchar *shown_flags = NULL;
+
+            shown_flags = build_compile_flags(priv, NULL);
+
             g_print("Would compile: %s -> %s\n",
                     priv->temp_source_path, cached_so_path);
             g_print("Extra flags: %s\n",
-                    priv->expanded_params != NULL ? priv->expanded_params : "(none)");
+                    shown_flags[0] != '\0' ? shown_flags : "(none)");
             priv->exit_code = 0;
             return 0;
         }
@@ -677,17 +950,21 @@ crispy_script_execute(
         if (priv->flags & CRISPY_FLAG_GDB)
         {
             g_autofree gchar *exe_path = NULL;
+            g_autofree gchar *gdb_flags = NULL;
             gchar **gdb_argv;
             gint gdb_argc;
             gint i;
 
-            exe_path = g_strdup_printf("/tmp/crispy-dbg-%d", getpid());
+            exe_path = g_strdup_printf("%s%ccrispy-dbg-%d",
+                                       g_get_tmp_dir(), G_DIR_SEPARATOR,
+                                       getpid());
+            gdb_flags = build_compile_flags(priv, NULL);
 
             if (!crispy_compiler_compile_executable(
                     priv->compiler,
                     priv->temp_source_path,
                     exe_path,
-                    priv->expanded_params,
+                    gdb_flags,
                     error))
             {
                 return -1;
@@ -716,6 +993,10 @@ crispy_script_execute(
             return -1;
         }
 
+        /* profile mode: build an instrumented executable and run gprof */
+        if (priv->flags & CRISPY_FLAG_PROFILE)
+            return run_profiled(priv, argc, argv, error);
+
         /* [5] PRE_COMPILE */
         populate_hook_context(priv, &ctx, cached_so_path, cache_hit,
                               argc, argv, error);
@@ -724,54 +1005,7 @@ crispy_script_execute(
         if (hook_result == CRISPY_HOOK_ABORT)
             return -1;
 
-        /*
-         * Build compile_flags with three-tier precedence.
-         * gcc uses last-wins for conflicting flags, so order matters:
-         *   1. config extra_flags    (defaults, lowest priority)
-         *   2. CRISPY_PARAMS         (script-level overrides)
-         *   3. plugin extra_flags    (from PRE_COMPILE hook)
-         *   4. config override_flags (forced, highest priority)
-         */
-        {
-            GString *flags_buf;
-
-            flags_buf = g_string_new(NULL);
-
-            /* tier 1: config extra_flags (defaults) */
-            if (priv->config_extra_flags != NULL &&
-                priv->config_extra_flags[0] != '\0')
-            {
-                g_string_append(flags_buf, priv->config_extra_flags);
-            }
-
-            /* tier 2: script's own CRISPY_PARAMS */
-            if (priv->expanded_params != NULL &&
-                priv->expanded_params[0] != '\0')
-            {
-                if (flags_buf->len > 0)
-                    g_string_append_c(flags_buf, ' ');
-                g_string_append(flags_buf, priv->expanded_params);
-            }
-
-            /* tier 3: plugin-injected extra_flags */
-            if (ctx.extra_flags != NULL && ctx.extra_flags[0] != '\0')
-            {
-                if (flags_buf->len > 0)
-                    g_string_append_c(flags_buf, ' ');
-                g_string_append(flags_buf, ctx.extra_flags);
-            }
-
-            /* tier 4: config override_flags (highest priority) */
-            if (priv->config_override_flags != NULL &&
-                priv->config_override_flags[0] != '\0')
-            {
-                if (flags_buf->len > 0)
-                    g_string_append_c(flags_buf, ' ');
-                g_string_append(flags_buf, priv->config_override_flags);
-            }
-
-            compile_flags = g_string_free(flags_buf, FALSE);
-        }
+        compile_flags = build_compile_flags(priv, ctx.extra_flags);
 
         /* normal compilation: compile to shared object */
         t_phase = g_get_monotonic_time();

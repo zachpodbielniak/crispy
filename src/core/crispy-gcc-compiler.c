@@ -6,6 +6,7 @@
 #include "crispy-gcc-compiler.h"
 #include "../interfaces/crispy-compiler.h"
 #include "../crispy-types.h"
+#include "crispy-header-tracker-private.h"
 
 #include <glib.h>
 #include <string.h>
@@ -103,9 +104,12 @@ run_gcc(
     const gchar               *source_path,
     const gchar               *output_path,
     const gchar               *extra_flags,
+    gboolean                   want_depfile,
     GError                   **error
 ){
     g_autofree gchar *cmd = NULL;
+    g_autofree gchar *depfile = NULL;
+    g_autofree gchar *dep_flags = NULL;
     gchar *std_out;
     gchar *std_err;
     gint exit_status;
@@ -114,9 +118,28 @@ run_gcc(
     std_err = NULL;
     exit_status = 0;
 
+    /*
+     * Record the headers this translation unit included, beside the
+     * object being built.  Without it the cache key covers the script
+     * text alone, so editing a header the script includes gives back
+     * last week's code with nothing to say so.  -MMD rather than -MD:
+     * a system header changing is covered by the compiler version in
+     * the cache key, and listing every glib header would mean stat()ing
+     * hundreds of files on each cache check.
+     */
+    if (want_depfile)
+    {
+        g_autofree gchar *quoted_dep = NULL;
+
+        depfile = crispy_header_tracker_get_depfile_path(output_path);
+        quoted_dep = g_shell_quote(depfile);
+        dep_flags = g_strconcat("-MMD -MF ", quoted_dep, NULL);
+    }
+
     /* build the compilation command */
-    cmd = g_strdup_printf("gcc -std=gnu89 %s %s %s -o %s %s",
+    cmd = g_strdup_printf("gcc -std=gnu89 %s %s %s %s -o %s %s",
                           mode_flags,
+                          dep_flags != NULL ? dep_flags : "",
                           priv->base_flags,
                           extra_flags != NULL ? extra_flags : "",
                           output_path,
@@ -182,7 +205,7 @@ gcc_compiler_compile_shared(
 
     priv = crispy_gcc_compiler_get_instance_private(CRISPY_GCC_COMPILER(self));
     return run_gcc(priv, "-shared -fPIC", source_path, output_path,
-                   extra_flags, error);
+                   extra_flags, TRUE, error);
 }
 
 static gboolean
@@ -197,7 +220,7 @@ gcc_compiler_compile_executable(
 
     priv = crispy_gcc_compiler_get_instance_private(CRISPY_GCC_COMPILER(self));
     return run_gcc(priv, "-g -O0", source_path, output_path,
-                   extra_flags, error);
+                   extra_flags, FALSE, error);
 }
 
 static void

@@ -130,6 +130,34 @@ Use =CRISPY_PARAMS= with =pkg-config= to add libraries:
 #include <gtk/gtk.h>
 #+end_src
 
+*** CRISPY_USE
+:PROPERTIES:
+:CUSTOM_ID: crispy-use
+:END:
+=CRISPY_USE= names pkg-config packages directly, without the shell:
+
+#+begin_src C
+#define CRISPY_USE "json-glib-1.0 libsoup-3.0"
+#include <json-glib/json-glib.h>
+#include <libsoup/soup.h>
+#+end_src
+
+This is resolved everywhere a script is compiled: running it, =crispy lint=, =crispy test= and =crispy install=. A package pkg-config cannot find is reported as a warning and the compile goes ahead without it, since the compiler's own message about the missing header is the clearer one.
+
+*** Including a sibling header
+:PROPERTIES:
+:CUSTOM_ID: including-a-sibling-header
+:END:
+A script's own directory is on the include path, so a script can include a header that sits next to it:
+
+#+begin_src C
+#include "helpers.h"    /* resolved relative to the script, not the temp copy */
+#+end_src
+
+This matters because compilation happens on a stripped copy of the script in the temp directory, which is not where the script lives.
+
+Editing such a header invalidates the cache: the compiler records what it included beside the cached object, and a header newer than the object forces a rebuild. Only headers reached through =#include "..."= and =-I= are tracked; system headers are covered by the compiler version in the cache key.
+
 ** Execution Modes
 :PROPERTIES:
 :CUSTOM_ID: execution-modes
@@ -246,7 +274,7 @@ crispy -i 'g_print("arg1=%s\n", argv[1]); return 0;' hello
 Crispy caches compiled shared objects in =~/.cache/crispy/=. The cache key is a SHA256 hash of:
 
 1. The full source content
-2. The expanded CRISPY_PARAMS value
+2. The script's own directory, its CRISPY_USE flags and the expanded CRISPY_PARAMS value
 3. The compiler version string
 
 *** Cache Behavior
@@ -254,8 +282,10 @@ Crispy caches compiled shared objects in =~/.cache/crispy/=. The cache key is a 
 :CUSTOM_ID: cache-behavior
 :END:
 - *First run*: Source is compiled to a =.so= and cached. This takes a moment.
-- *Subsequent runs*: If the cache entry exists and the source hasn't changed, the cached =.so= is loaded directly. Startup is nearly instant.
-- *Source changes*: Any modification to the source, CRISPY_PARAMS, or compiler version invalidates the cache.
+- *Subsequent runs*: If the cache entry exists and nothing it was built from has changed, the cached =.so= is loaded directly. Startup is nearly instant.
+- *Source changes*: Any modification to the source, CRISPY_PARAMS, CRISPY_USE or compiler version invalidates the cache.
+- *Header changes*: A header the script includes is not part of the cache key -- editing one changes nothing about the script text. The compiler records the headers it read in a =.d= file beside the cached object, and an entry whose headers are newer than itself is rebuilt.
+- *Interrupted runs*: The compiler's output is staged and renamed into place, so a cache entry is either the previous complete object or the new complete one. An entry that is not a loadable object is rejected and rebuilt, which is how a cache poisoned by an older crispy heals itself. Concurrent runs of the same script are safe.
 
 *** Cache Management
 :PROPERTIES:
@@ -281,6 +311,33 @@ crispy --gdb script.c
 
 This compiles the source to a temporary executable (not a .so) and runs =gdb --args <executable> <script_args>=.
 
+** Profiling
+:PROPERTIES:
+:CUSTOM_ID: profiling
+:END:
+Use =--profile= to compile the script as an instrumented executable, run it, and print gprof's report:
+
+#+begin_src sh
+crispy --profile script.c
+#+end_src
+
+Like =--gdb=, this builds a standalone executable rather than the usual shared object, and for the same kind of reason: =-pg= cannot work in a shared object. The counters are started by =monstartup()= and written out by =_mcleanup()=, both of which come from =gcrt1.o= and are linked only into an executable, so a =.so= built with =-pg= has the instrumentation and nothing to record it -- no =gmon.out= is ever written.
+
+Consequences worth knowing:
+
+- The script runs in a *child process*. A plugin's module-load and execute hooks do not fire, and the script's =argv[0]= is the temporary executable rather than the script path.
+- The cache is bypassed: the artifact is an executable, and the cache holds shared objects.
+- =gmon.out= is written in the working directory and removed once gprof has read it.
+- If gprof is not installed, the script still runs and its exit code is still returned; a warning says the report could not be produced.
+
+** Signals and Temporary Files
+:PROPERTIES:
+:CUSTOM_ID: signals-and-temporary-files
+:END:
+Ctrl+C (SIGINT) and SIGTERM stop crispy and remove the temporary source files it created on the way. The process dies of the signal it was sent, so a shell or a supervisor sees =WIFSIGNALED= and the usual 130/143 exit status.
+
+Temporary sources are written to =g_get_tmp_dir()=, which honours =TMPDIR=. Use =-S= / =--source-preserve= to keep them.
+
 ** Other Options
 :PROPERTIES:
 :CUSTOM_ID: other-options
@@ -288,6 +345,9 @@ This compiles the source to a temporary executable (not a .so) and runs =gdb --a
 #+begin_src sh
 # Keep temp source files (useful for debugging preprocessed source)
 crispy -S script.c
+
+# Compile with -pg, run, and print a gprof report
+crispy --profile script.c
 
 # Show what would be compiled without running
 crispy --dry-run script.c
@@ -307,6 +367,10 @@ crispy --license
 :CUSTOM_ID: performance-tips
 :END:
 - *Warm runs are fast*: After the first compilation, cached scripts load in milliseconds via =g_module_open()=.
+- *Staleness is judged in whole seconds*: =st_mtime= has one-second
+  resolution, so a script or header edited in the same second as the
+  compile that produced the cached artifact is not noticed. A second
+  later it is. =--no-cache= forces a rebuild when that matters.
 - *Cold runs depend on gcc*: First compilation time depends on script complexity and linked libraries.
 - *Cache is per-system*: Different compiler versions or pkg-config outputs produce separate cache entries. This is intentional -- binaries are not portable across systems.
 - *Use =-n= sparingly*: Forcing recompilation on every run negates the caching benefit.

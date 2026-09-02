@@ -34,6 +34,7 @@ LIB_SRCS := \
 	src/core/crispy-plugin-engine.c \
 	src/core/crispy-script.c \
 	src/core/crispy-source-utils-private.c \
+	src/core/crispy-temp-registry-private.c \
 	src/core/crispy-config-context.c \
 	src/core/crispy-config-loader.c \
 	src/core/crispy-dependency-info.c \

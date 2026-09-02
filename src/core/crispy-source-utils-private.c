@@ -11,6 +11,9 @@
 #define CRISPY_COMPILATION
 #endif
 #include "crispy-source-utils-private.h"
+#include "crispy-use-parser-private.h"
+#include "crispy-pkg-config-resolver.h"
+#include "../interfaces/crispy-dependency-resolver.h"
 #include "../crispy-types.h"
 
 #include <glib.h>
@@ -181,4 +184,57 @@ crispy_source_shell_expand(
 
     g_strstrip(std_out);
     return std_out;
+}
+
+/* --- crispy_source_resolve_use_flags --- */
+
+gchar *
+crispy_source_resolve_use_flags(
+    const gchar  *source,
+    GError      **error
+){
+    g_autoptr(CrispyPkgConfigResolver) resolver = NULL;
+
+    if (source == NULL)
+        return NULL;
+
+    resolver = crispy_pkg_config_resolver_new();
+
+    return crispy_use_parser_resolve(
+        source, CRISPY_DEPENDENCY_RESOLVER(resolver), error);
+}
+
+/* --- crispy_source_include_flag_for --- */
+
+gchar *
+crispy_source_include_flag_for(
+    const gchar *source_path
+){
+    g_autofree gchar *absolute = NULL;
+    g_autofree gchar *dir = NULL;
+    g_autofree gchar *quoted = NULL;
+
+    if (source_path == NULL)
+        return NULL;
+
+    /*
+     * An absolute path, because the flag is recorded in the dependency
+     * file and read back by a later run whose working directory is its
+     * own business.
+     */
+    if (g_path_is_absolute(source_path))
+    {
+        absolute = g_strdup(source_path);
+    }
+    else
+    {
+        g_autofree gchar *cwd = g_get_current_dir();
+
+        absolute = g_build_filename(cwd, source_path, NULL);
+    }
+
+    dir = g_path_get_dirname(absolute);
+    quoted = g_shell_quote(dir);
+
+    return g_strconcat("-I", quoted, NULL);
 }

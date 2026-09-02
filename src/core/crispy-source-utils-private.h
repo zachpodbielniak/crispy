@@ -58,6 +58,45 @@ gchar *crispy_source_strip_header (const gchar *source,
 gchar *crispy_source_shell_expand (const gchar  *params,
                                    GError      **error);
 
+/**
+ * crispy_source_resolve_use_flags:
+ * @source: full source text of a C file
+ * @error: return location for a #GError, or %NULL
+ *
+ * Resolves the script's `#define CRISPY_USE "pkg ..."` line into
+ * compiler and linker flags through a pkg-config resolver.
+ *
+ * Every path that turns a script into a compile needs this, and each one
+ * that spelled it out itself was a path that could forget: `crispy lint`,
+ * `crispy test` and `crispy install` resolved CRISPY_USE and the one that
+ * actually runs a script did not, so a script that linted clean failed to
+ * compile with "No such file or directory" on the header it had declared.
+ *
+ * Returns: (transfer full) (nullable): the resolved flags, %NULL if the
+ *          source declares no packages (which is not an error) or if a
+ *          package could not be resolved (which sets @error)
+ */
+gchar *crispy_source_resolve_use_flags (const gchar  *source,
+                                        GError      **error);
+
+/**
+ * crispy_source_include_flag_for:
+ * @source_path: (nullable): path of the script being compiled
+ *
+ * Returns the `-I` flag that puts @source_path's own directory on the
+ * include path, shell-quoted and absolute.
+ *
+ * Compilation happens on a stripped copy in the temp directory, so the
+ * script's directory is not the compiler's idea of "here" and
+ * `#include "sibling.h"` cannot resolve -- while `crispy lint` compiles
+ * the file in place and does resolve it, so the tool that reported the
+ * script clean was the one that was wrong.
+ *
+ * Returns: (transfer full) (nullable): the flag, or %NULL when there is
+ *          no file on disk (inline code, stdin)
+ */
+gchar *crispy_source_include_flag_for (const gchar *source_path);
+
 G_END_DECLS
 
 #endif /* CRISPY_SOURCE_UTILS_PRIVATE_H */
