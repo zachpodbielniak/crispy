@@ -459,6 +459,163 @@ Two things made this necessary:
 
 The registry is a fixed table read with atomic loads and emptied with =unlink()=, because a signal handler can neither take a lock nor wait on an allocator.
 
+** Internal Components
+:PROPERTIES:
+:CUSTOM_ID: internal-components
+:END:
+Beyond the public types, the library carries a set of =-private.c= /
+=-private.h= modules. These are compiled into =libcrispy.so= but their
+headers are *not installed* and not reachable through =crispy.h=. They
+are documented here because they explain how the pipeline and the
+subcommands actually work -- not because they are API. Anything here may
+change shape between releases.
+
+| Module                | Responsibility                                                        |
+|-----------------------+-----------------------------------------------------------------------|
+| =source-utils=        | Extracts =CRISPY_PARAMS=, shell-expands it, strips the crispy header   |
+| =shebang-parser=      | Finds the shebang line and its interpreter and arguments              |
+| =use-parser=          | Parses =CRISPY_USE=, splits the package list, resolves it to flags     |
+| =header-tracker=      | Reads the =.d= depfile; decides whether a tracked header went stale    |
+| =temp-registry=       | Async-signal-safe table of temp files to unlink on SIGINT/SIGTERM      |
+| =error-analyzer=      | Reads a failed compile's stderr and suggests the pkg-config package    |
+| =profiler=            | Supplies =-pg=, runs =gprof=, cleans up =gmon.out= (=--profile=)       |
+| =scaffolder=          | The built-in templates behind =crispy new=                            |
+| =linter=              | Strict-warning compile with no output binary (=crispy lint=)          |
+| =installer=           | Compiles to a native binary and installs it (=crispy install=)        |
+| =test-runner=         | Discovers =test_*()=, generates a GTest harness (=crispy test=)       |
+| =config-loader=       | Finds, compiles, and loads =config.c=; resolves =crispy_config_init=  |
+| =plugin-engine-private= | The internal hook dispatch entry point                              |
+
+*** Why these are private
+:PROPERTIES:
+:CUSTOM_ID: why-private
+:END:
+The three GInterfaces are the extension points, and each one is a
+contract someone could plausibly reimplement: a different compiler, a
+different cache, a different dependency resolver. The modules above are
+not contracts -- they are one implementation of one behaviour, and
+freezing them as public API would mean promising that =crispy new= keeps
+exactly four templates, or that staleness keeps being judged from a gcc
+=.d= file. Keeping them private is what lets those change.
+
+The dividing line is deliberate: *if a reasonable person might want to
+swap it out, it is an interface; if they would only ever want to use it,
+it is private.*
+
+*** Two things worth knowing about them
+:PROPERTIES:
+:CUSTOM_ID: private-notes
+:END:
+The *error analyzer* runs only on the failure path. When a compile fails
+it scans stderr for =fatal error: foo/foo.h: No such file or directory=
+and maps the header back to the pkg-config package that provides it, so
+the message a user gets names the =CRISPY_USE= line they should have
+written rather than only the header they were missing.
+
+The *header tracker* is why the cache is not simply "artifact newer than
+script". gcc is asked for a depfile, which is published alongside the
+=.so= as =<hash>.d=; on the next run every header listed there is checked
+against the artifact's mtime. Editing a header a script includes
+invalidates the entry even though the script itself did not change.
+
+** Extensibility
+:PROPERTIES:
+:CUSTOM_ID: extensibility
+:END:
+There are three ways to extend crispy, in increasing order of
+commitment.
+
+*** 1. Config file
+:PROPERTIES:
+:CUSTOM_ID: extend-config
+:END:
+=~/.config/crispy/config.c= is itself a C file that crispy compiles and
+loads, and its =crispy_config_init()= receives a =CrispyConfigContext=.
+That is enough to set default flags, force overrides, pick a cache
+directory, load plugins, and rewrite argv -- no rebuild of crispy
+required. See [[file:config.org][Configuration]].
+
+*** 2. Plugin
+:PROPERTIES:
+:CUSTOM_ID: extend-plugin
+:END:
+A plugin is a =.so= exporting hook functions, loaded via =-P= or from
+the config file, and dispatched at nine points across the pipeline. A
+hook can read the source, rewrite it, add compiler flags, force a
+recompile, or abort the run. This is the right level for policy --
+source auditing, timing, flag injection -- because it needs no changes
+to crispy and no reimplementation of anything. See
+[[file:plugins.org][the Plugin Authoring Guide]].
+
+*** 3. Interface implementation
+:PROPERTIES:
+:CUSTOM_ID: extend-interface
+:END:
+Implementing =CrispyCompiler=, =CrispyCacheProvider=, or
+=CrispyDependencyResolver= replaces a whole backend. =CrispyScript=
+takes its compiler and cache as constructor arguments and calls them
+only through the vfuncs, so a replacement needs no changes anywhere else
+in the library.
+
+| Interface                  | Implement it to get                                          |
+|----------------------------+--------------------------------------------------------------|
+| =CrispyCompiler=           | clang, tcc, a remote build service, a compile-server client   |
+| =CrispyCacheProvider=      | an in-memory cache, a shared network cache, a content store   |
+| =CrispyDependencyResolver= | resolution from a lockfile, a vendored manifest, or a sysroot |
+
+This path is for the library consumer, not the CLI user: the =crispy=
+executable always constructs =CrispyGccCompiler= and =CrispyFileCache=.
+Selecting implementations from the CLI is not currently possible.
+
+*** What a replacement backend must honour
+:PROPERTIES:
+:CUSTOM_ID: backend-contract
+:END:
+The vfunc signatures are not the whole contract. Two invariants live in
+the prose rather than the types, and a backend that ignores them will
+appear to work and then corrupt a concurrent run:
+
+- *Compilation must publish atomically.* Write to a staging name in the
+  output's own directory and rename it into place, so a reader sees
+  either the previous artifact or the complete new one. A failed compile
+  must leave the output path untouched.
+- *A cache entry must never be reported valid while incomplete.* The
+  file cache checks that the artifact is a loadable object, no older
+  than the script, and that no tracked header has been edited since.
+
+** Future Directions
+:PROPERTIES:
+:CUSTOM_ID: future-directions
+:END:
+Places where the architecture already has the shape for more than it
+currently does. These are not commitments.
+
+- *Backend selection from the CLI.* The interfaces exist and
+  =CrispyScript= takes them as arguments, but =main.c= hardcodes the two
+  concrete types. A =--compiler=clang= flag is a change to argument
+  parsing, not to the design.
+- *CRISPY_USE in the language server.* The compile flags the LSP
+  generates come from =CRISPY_PARAMS= only, so a script that declares
+  dependencies through =CRISPY_USE= alone is red in the editor and fine
+  on the command line. The resolver the CLI uses is already a library
+  type the server could call.
+- *Header changes in watch mode.* =CrispyWatcher= monitors the script
+  file, while the header tracker already knows the full dependency set
+  from the depfile. Monitoring that set is a matter of wiring two
+  existing pieces together.
+- *Shared or remote caches.* =CrispyCacheProvider= was designed for this;
+  what is missing is a portability story, since a cached artifact is
+  valid only for the exact compiler and pkg-config output that produced
+  it. The hash already includes both, so entries from different systems
+  cannot collide -- they simply will not be reused.
+- *More hook points.* =CRISPY_HOOK_POINT_COUNT= sizes the dispatch table,
+  so adding a point is additive for the engine. It is not additive for
+  plugins compiled against the old count, which is why the enum's tail
+  is the place to add.
+- *Introspection-driven bindings.* A GIR and typelib are already
+  generated when =BUILD_GIR=1=; nothing consumes them yet, but the
+  public API is annotated for it throughout.
+
 ** Thread Safety
 :PROPERTIES:
 :CUSTOM_ID: thread-safety

@@ -14,6 +14,25 @@ All public API is accessible through the umbrella header:
 
 Individual headers cannot be included directly (they will error).
 
+** Types at a Glance
+:PROPERTIES:
+:CUSTOM_ID: types-at-a-glance
+:END:
+| Type                                                             | Kind       | Role                                          |
+|------------------------------------------------------------------+------------+-----------------------------------------------|
+| [[#crispycompiler-ginterface][CrispyCompiler]]                             | GInterface | Compilation backend contract                  |
+| [[#crispycacheprovider-ginterface][CrispyCacheProvider]]                   | GInterface | Caching backend contract                      |
+| [[#crispydependencyresolver-ginterface][CrispyDependencyResolver]]         | GInterface | Dependency resolution contract                |
+| [[#crispygcccompiler-final-type][CrispyGccCompiler]]                       | Final      | gcc implementation of CrispyCompiler          |
+| [[#crispyfilecache-final-type][CrispyFileCache]]                           | Final      | =~/.cache/crispy= implementation of the cache |
+| [[#crispypkgconfigresolver-final-type][CrispyPkgConfigResolver]]           | Final      | pkg-config implementation of the resolver     |
+| [[#crispyscript-final-type][CrispyScript]]                                 | Final      | Pipeline orchestrator                         |
+| [[#crispypluginengine-final-type][CrispyPluginEngine]]                     | Final      | Plugin loading and hook dispatch              |
+| [[#crispywatcher-final-type][CrispyWatcher]]                               | Final      | File monitoring and re-execution (=--watch=)  |
+| [[#crispyrepl-final-type][CrispyRepl]]                                     | Final      | Interactive evaluator (=crispy repl=)         |
+| [[#crispydependencyinfo-boxed-type][CrispyDependencyInfo]]                 | Boxed      | One resolved dependency's flags               |
+| [[#crispyconfigcontext-plain-struct][CrispyConfigContext]]                 | Struct     | Handle passed to a config file's init         |
+
 --------------
 
 ** Enumerations
@@ -64,7 +83,13 @@ typedef enum
     CRISPY_ERROR_CACHE,
     CRISPY_ERROR_GCC_NOT_FOUND,
     CRISPY_ERROR_PLUGIN,
-    CRISPY_ERROR_CONFIG
+    CRISPY_ERROR_CONFIG,
+    CRISPY_ERROR_DEPENDENCY,
+    CRISPY_ERROR_SCAFFOLD,
+    CRISPY_ERROR_INSTALL,
+    CRISPY_ERROR_TEST,
+    CRISPY_ERROR_LINT,
+    CRISPY_ERROR_REPL
 } CrispyError;
 #+end_src
 
@@ -81,6 +106,12 @@ Error codes for the =CRISPY_ERROR= domain.
 | =CRISPY_ERROR_GCC_NOT_FOUND= | gcc binary not found                      |
 | =CRISPY_ERROR_PLUGIN=        | Plugin load or hook failure               |
 | =CRISPY_ERROR_CONFIG=        | Config file compilation or init failure   |
+| =CRISPY_ERROR_DEPENDENCY=    | Dependency resolution failed              |
+| =CRISPY_ERROR_SCAFFOLD=      | =crispy new= could not create the script  |
+| =CRISPY_ERROR_INSTALL=       | =crispy install= failed                   |
+| =CRISPY_ERROR_TEST=          | =crispy test= harness error               |
+| =CRISPY_ERROR_LINT=          | =crispy lint= could not run               |
+| =CRISPY_ERROR_REPL=          | REPL evaluation or session error          |
 
 *** CrispyHookPoint
 :PROPERTIES:
@@ -367,7 +398,9 @@ crispy_compiler_compile_executable(CrispyCompiler  *self,
                                    GError         **error);
 #+end_src
 
-Compiles the source file to a standalone executable with debug symbols. Used for =--gdb= mode.
+Compiles the source file to a standalone executable with debug symbols. Used by =--gdb= and =--profile=, which need a real process rather than a loadable object, and by =crispy install=.
+
+As with =crispy_compiler_compile_shared()=, the result is staged and renamed into place, so =output_path= is never a partially written file.
 
 *Parameters:*
 
@@ -534,6 +567,23 @@ crispy_file_cache_new(void);
 #+end_src
 
 Creates a new CrispyFileCache instance. The cache directory (=~/.cache/crispy/=) is created if it does not exist.
+
+*Returns:* (transfer full) a new CrispyFileCache
+
+*** crispy_file_cache_new_with_dir
+:PROPERTIES:
+:CUSTOM_ID: crispy_file_cache_new_with_dir
+:END:
+#+begin_src C
+CrispyFileCache *
+crispy_file_cache_new_with_dir(const gchar *cache_dir);
+#+end_src
+
+Creates a CrispyFileCache rooted at =cache_dir=, which is created if it does not exist. Passing NULL is equivalent to =crispy_file_cache_new()= and uses the default location. This backs =--cache-dir=.
+
+*Parameters:*
+
+- =cache_dir= -- (nullable) the cache directory, or NULL for the default
 
 *Returns:* (transfer full) a new CrispyFileCache
 
@@ -1067,6 +1117,409 @@ crispy_config_context_set_script_argv(CrispyConfigContext *ctx,
 #+end_src
 
 Replaces the script's argv entirely. The context takes ownership of =argv= (freed with =g_strfreev()= on cleanup).
+
+--------------
+
+** CrispyDependencyResolver (GInterface)
+:PROPERTIES:
+:CUSTOM_ID: crispydependencyresolver-ginterface
+:END:
+*Type macro:* =CRISPY_TYPE_DEPENDENCY_RESOLVER=
+
+*Cast macro:* =CRISPY_DEPENDENCY_RESOLVER(obj)=
+
+*Check macro:* =CRISPY_IS_DEPENDENCY_RESOLVER(obj)=
+
+The contract for resolving a named dependency into compiler and linker flags. The shipped implementation is [[#crispypkgconfigresolver-final-type][CrispyPkgConfigResolver]]; implement this interface to resolve dependencies from something other than pkg-config -- a vendored manifest, a lockfile, a build-system query.
+
+This is the interface behind =#define CRISPY_USE=.
+
+*** crispy_dependency_resolver_resolve
+:PROPERTIES:
+:CUSTOM_ID: crispy_dependency_resolver_resolve
+:END:
+#+begin_src C
+CrispyDependencyInfo *
+crispy_dependency_resolver_resolve(CrispyDependencyResolver  *self,
+                                   const gchar               *name,
+                                   GError                   **error);
+#+end_src
+
+Resolves a dependency by name, returning a CrispyDependencyInfo holding its compiler and linker flags.
+
+*Parameters:*
+
+- =self= -- a CrispyDependencyResolver
+- =name= -- the dependency name to resolve
+- =error= -- return location for a GError, or NULL
+
+*Returns:* (transfer full) (nullable) a CrispyDependencyInfo on success, NULL on error
+
+*** crispy_dependency_resolver_is_available
+:PROPERTIES:
+:CUSTOM_ID: crispy_dependency_resolver_is_available
+:END:
+#+begin_src C
+gboolean
+crispy_dependency_resolver_is_available(CrispyDependencyResolver *self,
+                                        const gchar              *name);
+#+end_src
+
+Checks whether the named dependency is available on the system, without resolving its flags.
+
+*Returns:* TRUE if available, FALSE otherwise
+
+*** crispy_dependency_resolver_get_version
+:PROPERTIES:
+:CUSTOM_ID: crispy_dependency_resolver_get_version
+:END:
+#+begin_src C
+gchar *
+crispy_dependency_resolver_get_version(CrispyDependencyResolver *self,
+                                       const gchar              *name);
+#+end_src
+
+Returns the version string for the named dependency.
+
+*Returns:* (transfer full) (nullable) the version string, free with =g_free()=, or NULL if unavailable
+
+--------------
+
+** CrispyDependencyInfo (Boxed Type)
+:PROPERTIES:
+:CUSTOM_ID: crispydependencyinfo-boxed-type
+:END:
+*Type macro:* =CRISPY_TYPE_DEPENDENCY_INFO=
+
+An opaque boxed type holding one resolved dependency: name, cflags, ldflags, version, and whether resolution succeeded. Not a GObject -- use =crispy_dependency_info_copy()= and =crispy_dependency_info_free()= for ownership, or =g_autoptr(CrispyDependencyInfo)=.
+
+*** crispy_dependency_info_new
+:PROPERTIES:
+:CUSTOM_ID: crispy_dependency_info_new
+:END:
+#+begin_src C
+CrispyDependencyInfo *
+crispy_dependency_info_new(const gchar *name,
+                           const gchar *cflags,
+                           const gchar *ldflags,
+                           const gchar *version,
+                           gboolean     resolved);
+#+end_src
+
+Allocates a new CrispyDependencyInfo. All string arguments are copied; the caller keeps ownership of the originals.
+
+*Parameters:*
+
+- =name= -- the package or library name (e.g. ="json-glib-1.0"=)
+- =cflags= -- flags from =pkg-config --cflags=
+- =ldflags= -- flags from =pkg-config --libs=
+- =version= -- (nullable) resolved version string
+- =resolved= -- TRUE if resolution succeeded
+
+*Returns:* (transfer full) a new CrispyDependencyInfo
+
+*** crispy_dependency_info_copy
+:PROPERTIES:
+:CUSTOM_ID: crispy_dependency_info_copy
+:END:
+#+begin_src C
+CrispyDependencyInfo *
+crispy_dependency_info_copy(CrispyDependencyInfo *info);
+#+end_src
+
+Returns a deep copy; all string fields are duplicated.
+
+*Returns:* (transfer full) a new CrispyDependencyInfo
+
+*** crispy_dependency_info_free
+:PROPERTIES:
+:CUSTOM_ID: crispy_dependency_info_free
+:END:
+#+begin_src C
+void
+crispy_dependency_info_free(CrispyDependencyInfo *info);
+#+end_src
+
+Frees all string fields and the struct. Passing NULL is safe.
+
+*** Accessors
+:PROPERTIES:
+:CUSTOM_ID: crispydependencyinfo-accessors
+:END:
+#+begin_src C
+const gchar *crispy_dependency_info_get_name    (CrispyDependencyInfo *info);
+const gchar *crispy_dependency_info_get_cflags  (CrispyDependencyInfo *info);
+const gchar *crispy_dependency_info_get_ldflags (CrispyDependencyInfo *info);
+const gchar *crispy_dependency_info_get_version (CrispyDependencyInfo *info);
+gboolean     crispy_dependency_info_is_resolved (CrispyDependencyInfo *info);
+#+end_src
+
+All (transfer none); =get_version= may return NULL.
+
+*** crispy_dependency_info_get_combined_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_dependency_info_get_combined_flags
+:END:
+#+begin_src C
+gchar *
+crispy_dependency_info_get_combined_flags(CrispyDependencyInfo *info);
+#+end_src
+
+Returns cflags and ldflags joined by a single space -- the form a compiler invocation wants.
+
+*Returns:* (transfer full) a new string, free with =g_free()=
+
+--------------
+
+** CrispyPkgConfigResolver (Final Type)
+:PROPERTIES:
+:CUSTOM_ID: crispypkgconfigresolver-final-type
+:END:
+*Type macro:* =CRISPY_TYPE_PKG_CONFIG_RESOLVER=
+
+*Check macros:* =CRISPY_IS_PKG_CONFIG_RESOLVER(obj)=, =CRISPY_IS_DEPENDENCY_RESOLVER(obj)=
+
+*Cast macro:* =CRISPY_PKG_CONFIG_RESOLVER(obj)=
+
+*Implements:* CrispyDependencyResolver
+
+*** crispy_pkg_config_resolver_new
+:PROPERTIES:
+:CUSTOM_ID: crispy_pkg_config_resolver_new
+:END:
+#+begin_src C
+CrispyPkgConfigResolver *
+crispy_pkg_config_resolver_new(void);
+#+end_src
+
+Creates a resolver backed by the system pkg-config, located by searching =PATH=. Construction probes =pkg-config --version= to check the tool is reachable, but the object is returned either way -- per-package availability is checked lazily by =crispy_dependency_resolver_is_available()=.
+
+*Returns:* (transfer full) a new CrispyPkgConfigResolver
+
+*** crispy_pkg_config_resolver_new_with_path
+:PROPERTIES:
+:CUSTOM_ID: crispy_pkg_config_resolver_new_with_path
+:END:
+#+begin_src C
+CrispyPkgConfigResolver *
+crispy_pkg_config_resolver_new_with_path(const gchar *pkg_config_path);
+#+end_src
+
+Same, with an explicit pkg-config binary. Use this when pkg-config is off =PATH=, or when a cross-compilation wrapper such as =arm-linux-gnueabihf-pkg-config= is required.
+
+*Parameters:*
+
+- =pkg_config_path= -- path to the pkg-config binary to use
+
+*Returns:* (transfer full) a new CrispyPkgConfigResolver
+
+--------------
+
+** CrispyWatcher (Final Type)
+:PROPERTIES:
+:CUSTOM_ID: crispywatcher-final-type
+:END:
+*Type macro:* =CRISPY_TYPE_WATCHER=
+
+*Check macro:* =CRISPY_IS_WATCHER(obj)=
+
+*Cast macro:* =CRISPY_WATCHER(obj)=
+
+Watches a script file with a GFileMonitor and re-executes it on change. Backs the =-w= / =--watch= CLI flag.
+
+*** crispy_watcher_new
+:PROPERTIES:
+:CUSTOM_ID: crispy_watcher_new
+:END:
+#+begin_src C
+CrispyWatcher *
+crispy_watcher_new(const gchar         *script_path,
+                   CrispyCompiler      *compiler,
+                   CrispyCacheProvider *cache,
+                   CrispyFlags          flags);
+#+end_src
+
+*Parameters:*
+
+- =script_path= -- path to the C source file to watch
+- =compiler= -- a CrispyCompiler implementation
+- =cache= -- a CrispyCacheProvider implementation
+- =flags= -- CrispyFlags controlling compilation and execution
+
+*Returns:* (transfer full) a new CrispyWatcher
+
+*** crispy_watcher_start
+:PROPERTIES:
+:CUSTOM_ID: crispy_watcher_start
+:END:
+#+begin_src C
+gboolean
+crispy_watcher_start(CrispyWatcher  *self,
+                     GError        **error);
+#+end_src
+
+Creates the file monitor and runs a GMainLoop. *This call blocks* until =crispy_watcher_stop()= is called, typically from a signal handler or a callback on another source.
+
+*Returns:* TRUE on success, FALSE if the monitor could not be created
+
+*** crispy_watcher_stop
+:PROPERTIES:
+:CUSTOM_ID: crispy_watcher_stop
+:END:
+#+begin_src C
+void
+crispy_watcher_stop(CrispyWatcher *self);
+#+end_src
+
+Cancels the monitor and quits the internal main loop, making =crispy_watcher_start()= return.
+
+*** crispy_watcher_is_running
+:PROPERTIES:
+:CUSTOM_ID: crispy_watcher_is_running
+:END:
+#+begin_src C
+gboolean
+crispy_watcher_is_running(CrispyWatcher *self);
+#+end_src
+
+*Returns:* TRUE if the watcher is active
+
+*** crispy_watcher_set_debounce_ms / get_debounce_ms
+:PROPERTIES:
+:CUSTOM_ID: crispy_watcher_debounce
+:END:
+#+begin_src C
+void  crispy_watcher_set_debounce_ms(CrispyWatcher *self, guint ms);
+guint crispy_watcher_get_debounce_ms(CrispyWatcher *self);
+#+end_src
+
+On a change event the watcher waits =ms= milliseconds before recompiling; further events during that window reset the timer. This is what keeps an editor that saves in several steps from triggering several rebuilds. Default: *500 ms*.
+
+*** crispy_watcher_set_script_argv
+:PROPERTIES:
+:CUSTOM_ID: crispy_watcher_set_script_argv
+:END:
+#+begin_src C
+void
+crispy_watcher_set_script_argv(CrispyWatcher  *self,
+                               gint            argc,
+                               gchar         **argv);
+#+end_src
+
+Sets the argument vector forwarded to the script's =main()= on every re-execution.
+
+*Parameters:*
+
+- =argc= -- number of arguments in =argv=
+- =argv= -- (array length=argc) (transfer none) the argument vector
+
+--------------
+
+** CrispyRepl (Final Type)
+:PROPERTIES:
+:CUSTOM_ID: crispyrepl-final-type
+:END:
+*Type macro:* =CRISPY_TYPE_REPL=
+
+*Check macro:* =CRISPY_IS_REPL(obj)=
+
+*Cast macro:* =CRISPY_REPL(obj)=
+
+An interactive C evaluator. Each input is wrapped in an entry function, compiled to a shared object, loaded, and executed in-process. Preprocessor directives, function definitions, and type declarations accumulate in a *preamble* prepended to every later evaluation, which is how an =#include= or a helper function persists across inputs. Backs the =crispy repl= subcommand.
+
+*** crispy_repl_new
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_new
+:END:
+#+begin_src C
+CrispyRepl *
+crispy_repl_new(CrispyCompiler      *compiler,
+                CrispyCacheProvider *cache);
+#+end_src
+
+*Returns:* (transfer full) a new CrispyRepl
+
+*** crispy_repl_start
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_start
+:END:
+#+begin_src C
+gboolean
+crispy_repl_start(CrispyRepl  *self,
+                  GError     **error);
+#+end_src
+
+Runs the interactive loop with readline editing and history, reading from stdin until =:quit=, =exit=, or EOF. Blocks until the loop ends.
+
+*Returns:* TRUE on clean exit, FALSE on error
+
+*** crispy_repl_eval
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_eval
+:END:
+#+begin_src C
+gint
+crispy_repl_eval(CrispyRepl   *self,
+                 const gchar  *code,
+                 GError      **error);
+#+end_src
+
+Evaluates C code without the interactive loop -- the entry point for embedding the REPL. Directives accumulate into the preamble; statements are wrapped, compiled, loaded, and run. Compilation failures come back through =error= carrying the compiler's diagnostic text.
+
+*Parameters:*
+
+- =self= -- a CrispyRepl
+- =code= -- C code to evaluate (may be multiple lines)
+- =error= -- return location for a GError, or NULL
+
+*Returns:* the exit code of the evaluated code (0 = success), or -1 on error
+
+*** crispy_repl_set_prompt / get_prompt
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_prompt
+:END:
+#+begin_src C
+void         crispy_repl_set_prompt(CrispyRepl *self, const gchar *prompt);
+const gchar *crispy_repl_get_prompt(CrispyRepl *self);
+#+end_src
+
+The prompt shown before each input line. Default: ="crispy> "=.
+
+*** crispy_repl_set_extra_flags
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_set_extra_flags
+:END:
+#+begin_src C
+void
+crispy_repl_set_extra_flags(CrispyRepl  *self,
+                            const gchar *flags);
+#+end_src
+
+Compiler flags passed on every evaluation -- the way to give a REPL session access to a library. Pass NULL to clear.
+
+*** crispy_repl_reset
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_reset
+:END:
+#+begin_src C
+void
+crispy_repl_reset(CrispyRepl *self);
+#+end_src
+
+Clears the accumulated preamble and resets session state. Backs the =:clear= command.
+
+*** crispy_repl_get_preamble
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_get_preamble
+:END:
+#+begin_src C
+const gchar *
+crispy_repl_get_preamble(CrispyRepl *self);
+#+end_src
+
+The accumulated preamble -- includes, defines, functions, types. Backs the =:preamble= command.
+
+*Returns:* (transfer none) the preamble string
 
 --------------
 

@@ -13,9 +13,15 @@ A GLib-native C scripting tool. Write C scripts that compile on-the-fly, cache a
 - *Instant startup* -- compiled scripts are cached by content hash; subsequent runs load the cached =.so= directly
 - *GLib-native* -- scripts link against glib-2.0, gobject-2.0, gio-2.0, and gmodule-2.0 by default
 - *CRISPY_PARAMS* -- add extra compiler flags via =#define CRISPY_PARAMS= with shell expansion (backticks, =$()=)
+- *CRISPY_USE* -- declare pkg-config dependencies by name and let crispy resolve the flags
 - *Multiple modes* -- file, inline (=-i=), stdin (=-=), and shebang (=#!/usr/bin/crispy=)
-- *GDB support* -- =--gdb= compiles with debug symbols and launches under gdb
-- *Extensible library* -- GObject interfaces for compiler and cache backends
+- *Subcommands* -- =new= to scaffold, =lint= to check, =test= to run GTest, =install= to ship a native binary, =repl= for a C prompt
+- *Watch mode* -- =-w= re-runs the script every time you save it
+- *GDB and gprof* -- =--gdb= launches under a debugger; =--profile= compiles with =-pg= and prints a report
+- *Configurable* -- =~/.config/crispy/config.c= is itself C, compiled and loaded to set defaults
+- *Plugins* -- =.so= hooks at nine points in the pipeline, for auditing, timing, or flag injection
+- *Editor support* -- =crispy-language-server= proxies clangd with crispy-aware shebang and flag handling
+- *Extensible library* -- GObject interfaces for compiler, cache, and dependency-resolution backends
 
 ** Quick Start
 #+begin_src sh
@@ -70,11 +76,32 @@ Options:
       --profile             Compile with -pg, run, and print a gprof report
   -w, --watch               Re-run the script when it changes
       --dry-run             Describe the compile (or the cache hit), do not run
-      --clean-cache         Purge ~/.cache/crispy/ and exit
+  -P, --plugins PATHS       Load plugin .so files (colon/comma-separated)
+  -c, --config PATH         Use this config file
+      --no-config           Skip config loading
+      --cache-dir PATH      Override the cache directory
+      --generate-c-config   Print a default config to stdout and exit
+      --clean-cache         Purge the cache directory and exit
   -v, --version             Show version
       --license             Show AGPLv3 license notice
   -h, --help                Show help
+
+Subcommands:
+  crispy new [--template=TEMPLATE] [--dir=DIR] NAME
+  crispy install [--dir=DIR] SCRIPT.c
+  crispy test SCRIPT.c
+  crispy lint SCRIPT.c
+  crispy repl
 #+end_example
+
+Everything after the script path goes to the script, not to crispy:
+
+#+begin_src sh
+crispy script.c -f blah    # script sees: -f blah
+crispy -n script.c         # crispy gets -n; script sees no args
+#+end_src
+
+See the [[file:docs/cli.org][CLI Reference]] for every option and subcommand.
 
 ** Building
 *** Dependencies
@@ -84,7 +111,9 @@ Fedora 42+:
 make install-deps
 #+end_src
 
-This installs: =gcc=, =make=, =pkgconf-pkg-config=, =glib2-devel=.
+This installs: =gcc=, =make=, =pkgconf-pkg-config=, =glib2-devel=, =json-glib-devel=, and =readline-devel=. Ubuntu/Debian and Arch are detected as well.
+
+The language server additionally needs =clangd= on =PATH= at runtime.
 
 For GObject Introspection support, also install =gobject-introspection-devel=:
 
@@ -110,6 +139,7 @@ make show-config    # Show current build configuration
 #+begin_example
 build/release/
 ├── crispy                          # CLI executable
+├── crispy-language-server          # LSP server (clangd proxy)
 ├── libcrispy.a                     # Static library
 ├── libcrispy.so -> libcrispy.so.0  # Shared library symlinks
 ├── libcrispy.so.0 -> libcrispy.so.0.1.0
@@ -122,31 +152,46 @@ build/release/
 Crispy is built on GObject interfaces for extensibility:
 
 #+begin_example
-CrispyCompiler (GInterface)     CrispyCacheProvider (GInterface)
-       │                                │
-       ▼                                ▼
-CrispyGccCompiler (Final)      CrispyFileCache (Final)
-       │                                │
-       └──────────┬─────────────────────┘
-                  ▼
-          CrispyScript (Final)
+CrispyCompiler      CrispyCacheProvider    CrispyDependencyResolver
+  (GInterface)         (GInterface)              (GInterface)
+       │                    │                         │
+       ▼                    ▼                         ▼
+CrispyGccCompiler   CrispyFileCache        CrispyPkgConfigResolver
+     (Final)             (Final)                   (Final)
+       │                    │
+       └─────────┬──────────┘
+                 ▼
+         CrispyScript (Final)
 #+end_example
 
-- *CrispyCompiler* -- compilation contract (get_version, compile_shared, compile_executable)
+- *CrispyCompiler* -- compilation contract (get_version, get_base_flags, compile_shared, compile_executable)
 - *CrispyCacheProvider* -- caching contract (compute_hash, get_path, has_valid, purge)
+- *CrispyDependencyResolver* -- dependency contract (resolve, is_available, get_version); backs =CRISPY_USE=
 - *CrispyGccCompiler* -- gcc-based compiler implementation
 - *CrispyFileCache* -- filesystem cache in =~/.cache/crispy/=
+- *CrispyPkgConfigResolver* -- pkg-config dependency resolution
 - *CrispyScript* -- orchestrator that ties compilation and caching together
+- *CrispyPluginEngine* -- loads plugin =.so= files and dispatches hooks
+- *CrispyWatcher* / *CrispyRepl* -- back =--watch= and =crispy repl=
 
-Implement the interfaces to add custom compiler backends (clang, tcc) or cache strategies (in-memory, network-shared).
+Implement the interfaces to add custom compiler backends (clang, tcc), cache strategies (in-memory, network-shared), or dependency resolution (lockfile, vendored manifest).
 
 ** Examples
-| File                 | Description                    |
-|----------------------+--------------------------------|
-| =examples/hello.c=   | Basic hello world with shebang |
-| =examples/args.c=    | Argument passing demonstration |
-| =examples/file-io.c= | GIO file operations            |
-| =examples/math.c=    | CRISPY_PARAMS demo with =-lm=  |
+| File                         | Description                                            |
+|------------------------------+--------------------------------------------------------|
+| =examples/hello.c=           | Basic hello world with shebang                         |
+| =examples/args.c=            | Argument passing demonstration                         |
+| =examples/file-io.c=         | GIO file operations                                    |
+| =examples/math.c=            | CRISPY_PARAMS demo with =-lm=                          |
+| =examples/physics.c=         | Relies on the config file for =-lm= instead of declaring it |
+| =examples/ai-glib-simple.c=  | CRISPY_PARAMS with =pkg-config= for a third-party library   |
+
+Plugin examples live in =examples/plugins/=:
+
+| File                                 | Description                              |
+|--------------------------------------+------------------------------------------|
+| =plugin-timing.c=                    | Per-phase timing report to stderr        |
+| =plugin-source-guard.c=              | Rejects scripts calling dangerous functions |
 
 ** Tests
 GTest, one binary per =tests/test-*.c=, all picked up by wildcard:
@@ -161,7 +206,11 @@ Tests that compile C at runtime (=test-gcc-compiler=, =test-script=, =test-repl=
 
 ** Documentation
 - [[file:docs/scripting.org][Script Authoring Guide]] -- how to write and run crispy scripts
-- [[file:docs/architecture.org][Architecture]] -- library design, interfaces, extension points
+- [[file:docs/cli.org][CLI Reference]] -- every option, subcommand, exit code, and environment variable
+- [[file:docs/config.org][Configuration]] -- the =config.c= file, search order, and flag precedence
+- [[file:docs/plugins.org][Plugin Authoring Guide]] -- hook points, the hook context, and plugin lifecycle
+- [[file:docs/lsp.org][Language Server]] -- =crispy-language-server= and editor setup
+- [[file:docs/architecture.org][Architecture]] -- library design, interfaces, internals, and extension points
 - [[file:docs/api.org][API Reference]] -- complete API for all types, interfaces, and functions
 
 ** Caching

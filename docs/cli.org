@@ -1,0 +1,341 @@
+* Crispy CLI Reference
+:PROPERTIES:
+:CUSTOM_ID: crispy-cli-reference
+:END:
+Complete reference for the =crispy= command: invocation forms, options,
+subcommands, exit codes, and environment variables.
+
+For how to *write* the scripts this command runs, see
+[[file:scripting.org][the Script Authoring Guide]]. For the config file
+that changes its defaults, see [[file:config.org][Configuration]].
+
+** Invocation Forms
+:PROPERTIES:
+:CUSTOM_ID: invocation-forms
+:END:
+#+begin_example
+crispy [OPTIONS] SCRIPT [SCRIPT_ARGS...]   # run a file
+crispy [OPTIONS] -i "CODE" [SCRIPT_ARGS...]   # run inline code
+crispy [OPTIONS] - [SCRIPT_ARGS...]           # run code from stdin
+... | crispy                                  # piped stdin, "-" implied
+crispy SUBCOMMAND [...]                       # new, install, test, lint, repl
+#+end_example
+
+A script may also carry =#!/usr/bin/crispy= and be executed directly.
+
+*** Where crispy's options stop and the script's begin
+:PROPERTIES:
+:CUSTOM_ID: option-split
+:END:
+Everything *after* the script path belongs to the script. Crispy splits
+the argument vector at the first non-option argument and never parses
+past it, so a script is free to have flags that collide with crispy's
+own.
+
+#+begin_src sh
+crispy script.c -f blah    # script sees: -f blah
+crispy -n script.c         # crispy gets -n; script sees no args
+crispy -n script.c -n      # crispy gets -n; script also sees -n
+#+end_src
+
+The same split applies to =-i= and stdin mode: arguments following the
+code become the script's =argv=.
+
+** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option                   | Arg       | Effect                                                          |
+|--------------------------+-----------+-----------------------------------------------------------------|
+| =-i=, =--inline=         | =CODE=    | Compile and run =CODE= instead of a file                        |
+| =-I=, =--include=        | =HEADERS= | Extra headers, semicolon-separated (inline/stdin mode)           |
+| =-p=, =--preload=        | =LIBNAME= | =dlopen= a shared library before executing the script            |
+| =-n=, =--no-cache=       |           | Skip the cache; always recompile                                |
+| =-S=, =--source-preserve= |          | Keep the stripped temp source instead of unlinking it            |
+| =-w=, =--watch=          |           | Re-run the script whenever the script file changes               |
+| =--gdb=                  |           | Compile as an executable with =-g= and launch it under gdb       |
+| =--profile=              |           | Compile with =-pg=, run, then print a =gprof= report             |
+| =--dry-run=              |           | Describe the compile, or the cache hit, and exit without running |
+| =-P=, =--plugins=        | =PATHS=   | Load plugin =.so= files (colon- or comma-separated)              |
+| =--cache-dir=            | =PATH=    | Use =PATH= instead of =~/.cache/crispy=                          |
+| =-c=, =--config=         | =PATH=    | Load this config file instead of searching                       |
+| =--no-config=            |           | Skip config loading entirely                                    |
+| =--generate-c-config=    |           | Print a commented default config to stdout and exit              |
+| =--clean-cache=          |           | Purge the cache directory and exit                              |
+| =-v=, =--version=        |           | Print version information and exit                              |
+| =--license=              |           | Print the AGPLv3 notice and exit                                |
+| =--logo=                 |           | Print the ASCII logo and exit                                   |
+| =-h=, =--help=           |           | Print usage and exit                                            |
+
+*** Notes on individual options
+:PROPERTIES:
+:CUSTOM_ID: option-notes
+:END:
+- =--dry-run= does not execute the script. On a cold cache it reports
+  what would be compiled; on a warm cache it reports which cached
+  artifact would be loaded. Neither path runs =main()=.
+- =--gdb= and =--profile= both switch crispy from the shared-object
+  path to compiling a real executable, because gdb and gprof need a
+  process of their own. Cache entries from these modes are keyed
+  separately from ordinary runs.
+- =--clean-cache= honours =--cache-dir=, so it purges the directory the
+  same invocation would have used -- it does not unconditionally target
+  =~/.cache/crispy=.
+- =-I= is for inline and stdin mode, where there is no file to put
+  =#include= lines in. In file mode, write the includes in the script.
+
+** Subcommands
+:PROPERTIES:
+:CUSTOM_ID: subcommands
+:END:
+A subcommand is recognised when the first argument is a bare word (not
+a flag). Subcommands do not take crispy's ordinary options; each has its
+own small set.
+
+*** crispy new
+:PROPERTIES:
+:CUSTOM_ID: crispy-new
+:END:
+#+begin_example
+crispy new [--template=TEMPLATE] [--dir=DIR] NAME
+#+end_example
+
+Scaffolds a new script from a built-in template, writes it with the
+executable bit set, and prints the path it created.
+
+| Template   | Contents                                                     |
+|------------+--------------------------------------------------------------|
+| =minimal=  | Shebang, =#include <glib.h>=, an empty =main()=              |
+| =glib=     | GLib idioms -- =g_autoptr=, a =GPtrArray=, string handling   |
+| =gtk=      | A GTK application skeleton with the =CRISPY_USE= line set up |
+| =cli=      | =GOptionContext= argument parsing boilerplate                |
+
+=glib= is the default, used when =--template= is omitted or names a
+template that does not exist. =--dir= chooses the output directory
+(default: the working directory).
+
+#+begin_src sh
+crispy new hello                      # ./hello.c from the glib template
+crispy new --template=cli mytool      # ./mytool.c with option parsing
+crispy new --template=gtk --dir=~/bin app
+#+end_src
+
+*** crispy install
+:PROPERTIES:
+:CUSTOM_ID: crispy-install
+:END:
+#+begin_example
+crispy install [--dir=DIR] SCRIPT.c
+#+end_example
+
+Compiles the script to a standalone native executable and installs it,
+named after the script with the =.c= extension dropped. The default
+directory is =~/.local/bin=; =--dir= overrides it.
+
+The installed binary does not need crispy at runtime. Installation
+strips the crispy header lines -- the shebang and the =CRISPY_PARAMS= /
+=CRISPY_USE= defines -- before handing the source to the compiler, and
+resolves both of those into the compile flags first, so the binary links
+against exactly what the script declared.
+
+#+begin_src sh
+crispy install mytool.c              # -> ~/.local/bin/mytool
+crispy install --dir=/usr/local/bin mytool.c
+#+end_src
+
+*** crispy test
+:PROPERTIES:
+:CUSTOM_ID: crispy-test
+:END:
+#+begin_example
+crispy test SCRIPT.c
+#+end_example
+
+Finds every =test_*()= function in the script, generates a GTest harness
+=main()= that registers them, compiles the pair as a shared object, and
+runs =g_test_run()=.
+
+Discovery is textual: a line declaring =void test_something(=, =int
+test_something(=, or =gint test_something(= is picked up. The script's
+own =main()=, if it has one, is ignored by the harness.
+
+#+begin_src C
+#!/usr/bin/crispy
+#include <glib.h>
+
+void
+test_addition(void)
+{
+    g_assert_cmpint(2 + 2, ==, 4);
+}
+
+void
+test_strings(void)
+{
+    g_autofree gchar *s = g_strdup_printf("%d", 42);
+    g_assert_cmpstr(s, ==, "42");
+}
+#+end_src
+
+#+begin_src sh
+crispy test mytests.c
+#+end_src
+
+Exits 0 when every test passes. A failing =g_assert_*= aborts the
+harness, so a failed run exits *134* (SIGABRT) rather than 1 -- which is
+GTest's normal behaviour, but worth knowing if a CI step is matching on
+exit code 1.
+
+*** crispy lint
+:PROPERTIES:
+:CUSTOM_ID: crispy-lint
+:END:
+#+begin_example
+crispy lint SCRIPT.c
+#+end_example
+
+Runs the compiler over the script with strict warning flags and no
+output binary, then prints whatever it said. =CRISPY_PARAMS= and
+=CRISPY_USE= are resolved first, so a script that depends on an external
+library lints against that library's real headers rather than failing on
+a missing include.
+
+Prints =No warnings.= and exits 0 when clean; prints the diagnostics and
+exits 1 otherwise.
+
+#+begin_src sh
+crispy lint script.c
+#+end_src
+
+Linting compiles the file in place rather than a stripped temp copy, so
+=#include "sibling.h"= resolves the same way it does on the run path.
+
+*Known issue:* because the file is compiled in place, the shebang line is
+not stripped, and the compiler rejects it:
+
+#+begin_example
+error: invalid preprocessing directive #!
+#+end_example
+
+So =crispy lint= currently fails on any script carrying a
+=#!/usr/bin/crispy= line -- which is most of them. Until that is fixed,
+lint a copy with the shebang removed:
+
+#+begin_src sh
+tail -n +2 script.c > /tmp/lint.c && crispy lint /tmp/lint.c
+#+end_src
+
+The run, =test=, and =install= paths all strip the shebang correctly;
+this affects =lint= alone.
+
+*** crispy repl
+:PROPERTIES:
+:CUSTOM_ID: crispy-repl
+:END:
+#+begin_example
+crispy repl
+#+end_example
+
+Starts an interactive C REPL with readline editing and history
+persisted to =~/.crispy_history=. Each
+line you enter is wrapped in an entry function, compiled to a shared
+object, loaded, and executed in-process.
+
+Preprocessor directives, function definitions, and type declarations do
+not execute -- they accumulate in a *preamble* that is prepended to
+every later evaluation. So an =#include= or a helper function you define
+stays available for the rest of the session.
+
+#+begin_example
+crispy> #include <math.h>
+crispy> g_print("%f\n", sqrt(2.0));
+1.414214
+crispy> gint square(gint x) { return x * x; }
+crispy> g_print("%d\n", square(7));
+49
+#+end_example
+
+An input that is not yet a complete construct -- unbalanced braces or
+parentheses -- continues onto the next line. A blank line evaluates
+whatever is pending.
+
+| Command                | Effect                                         |
+|------------------------+------------------------------------------------|
+| =:help=, =:h=          | Show the command list                          |
+| =:preamble=, =:p=      | Print the accumulated preamble                 |
+| =:clear=, =:c=         | Discard the preamble and reset the session     |
+| =:quit=, =:q=, =exit=  | Leave the REPL                                 |
+
+Ctrl-D exits as well.
+
+** Watch Mode
+:PROPERTIES:
+:CUSTOM_ID: watch-mode
+:END:
+=-w= / =--watch= runs the script, then keeps running, re-running it
+whenever the file changes on disk.
+
+#+begin_src sh
+crispy --watch script.c
+crispy --watch script.c arg1 arg2   # args are re-passed on every run
+#+end_src
+
+Change events are debounced by 500 ms, so an editor that writes a file
+in several steps triggers one rebuild rather than several. Ctrl-C leaves
+watch mode.
+
+The monitor is on the script file itself. Editing a header the script
+includes does not trigger a re-run, even though that header is tracked
+for cache staleness -- touch or re-save the script to pick it up.
+
+Watch mode uses the ordinary cache, so an edit that you then undo
+re-runs from the cached artifact rather than recompiling.
+
+** Exit Codes
+:PROPERTIES:
+:CUSTOM_ID: exit-codes
+:END:
+| Code    | Meaning                                                       |
+|---------+---------------------------------------------------------------|
+| script's | In run modes, crispy exits with whatever =main()= returned    |
+| =0=     | Subcommand succeeded; =--dry-run=, =-v=, =--license= finished |
+| =1=     | Crispy itself failed -- compile error, load error, bad usage  |
+| =1=     | =crispy lint= with diagnostics to report                      |
+| =134=   | =crispy test= with a failing assertion (GTest aborts)         |
+| =130=   | Interrupted (SIGINT); crispy dies of the signal               |
+| =143=   | Terminated (SIGTERM); crispy dies of the signal               |
+
+Because crispy re-raises the signal rather than calling =exit()=, a
+shell or supervisor sees =WIFSIGNALED= for the last two, which is what a
+job-control-aware caller expects.
+
+** Environment Variables
+:PROPERTIES:
+:CUSTOM_ID: environment-variables
+:END:
+| Variable              | Effect                                                     |
+|-----------------------+------------------------------------------------------------|
+| =CRISPY_CONFIG_FILE=  | Config file path; wins over =-c= and the search path       |
+| =NO_CRISPY_CONFIG=    | If set to anything, skip config loading (same as =--no-config=) |
+| =TMPDIR=              | Where stripped temp sources are written (via =g_get_tmp_dir()=) |
+| =XDG_CACHE_HOME=      | Cache root; =~/.cache= when unset                          |
+| =PATH=                | Searched for =gcc=, =pkg-config=, =gdb=, and =gprof=       |
+
+** Signals and Temporary Files
+:PROPERTIES:
+:CUSTOM_ID: signals-and-temp-files
+:END:
+Crispy writes a stripped copy of the script -- shebang and crispy
+defines removed -- to the temp directory before compiling, and registers
+it for cleanup. SIGINT and SIGTERM unlink every registered temp file
+before the process dies. =-S= / =--source-preserve= keeps them, which is
+what you want when inspecting exactly what the compiler was given.
+
+** See Also
+:PROPERTIES:
+:CUSTOM_ID: cli-see-also
+:END:
+- [[file:scripting.org][Script Authoring Guide]] -- writing scripts
+- [[file:config.org][Configuration]] -- the config file and flag precedence
+- [[file:plugins.org][Plugin Authoring Guide]] -- what =-P= loads
+- [[file:lsp.org][Language Server]] -- editor integration

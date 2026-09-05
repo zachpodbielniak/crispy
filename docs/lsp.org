@@ -1,0 +1,142 @@
+* Crispy Language Server
+:PROPERTIES:
+:CUSTOM_ID: crispy-language-server
+:END:
+=crispy-language-server= is an LSP server that gives editors real C
+intelligence -- completion, hover, go-to-definition, and diagnostics --
+inside crispy scripts, which plain C tooling gets wrong because of the
+shebang and the crispy defines.
+
+It is built and installed alongside the CLI by =make= and =make install=.
+
+** The Problem It Solves
+:PROPERTIES:
+:CUSTOM_ID: lsp-problem
+:END:
+A crispy script is C, but not C that a bare clangd can read:
+
+- The =#!/usr/bin/crispy= shebang is not valid C, so the first line is a
+  syntax error and everything after it degrades.
+- =#define CRISPY_PARAMS "`pkg-config --cflags --libs gtk4`"= is where
+  the compile flags live. clangd has no idea that line means =-I= paths;
+  without them every =#include <gtk/gtk.h>= is a missing header and the
+  whole file goes red.
+- There is no =compile_commands.json= for a standalone script, so clangd
+  has no flags at all.
+
+** How It Works
+:PROPERTIES:
+:CUSTOM_ID: lsp-how-it-works
+:END:
+The server is a *proxy*. It speaks LSP to the editor, runs =clangd= as a
+child process, and translates between them.
+
+#+begin_example
+editor  <--LSP-->  crispy-language-server  <--LSP-->  clangd
+                          │
+                          ├─ blanks the shebang and CRISPY_PARAMS lines
+                          ├─ resolves CRISPY_PARAMS to real compile flags
+                          └─ writes a compile_commands.json in a tempdir
+#+end_example
+
+For each open document the server decides whether it is a crispy script
+-- the test is a shebang line containing =crispy=.
+
+- *Plain C files* are forwarded to clangd untouched. clangd finds the
+  project's own =compile_commands.json= by walking up from the file's
+  directory, exactly as it would without the proxy in the way.
+- *Crispy scripts* get a virtual copy in which the shebang line and the
+  =CRISPY_PARAMS= line are replaced with *empty lines*, and a generated
+  =compile_commands.json= carrying the flags those lines implied.
+
+Blanking rather than deleting is the key detail: the line count is
+unchanged, so every line and column number clangd reports is already
+correct for the real file. Only URIs need rewriting on the way back --
+positions pass through untranslated.
+
+** Capabilities
+:PROPERTIES:
+:CUSTOM_ID: lsp-capabilities
+:END:
+| LSP method                     | Provided |
+|--------------------------------+----------|
+| =textDocument/completion=      | yes      |
+| =textDocument/hover=           | yes      |
+| =textDocument/definition=      | yes      |
+| =textDocument/publishDiagnostics= | yes   |
+| =textDocument/didOpen=         | yes      |
+| =textDocument/didChange=       | yes      |
+| =textDocument/didClose=        | yes      |
+
+Diagnostics are pushed from clangd and flushed through to the editor as
+they arrive, so errors appear as you type rather than on save.
+
+** Requirements
+:PROPERTIES:
+:CUSTOM_ID: lsp-requirements
+:END:
+- =clangd= on =PATH= -- the server does the crispy-specific translation,
+  clangd does the C analysis.
+- =pkg-config=, for resolving =CRISPY_PARAMS= into include paths.
+- =json-glib-1.0= at build time (installed by =make install-deps=).
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: lsp-usage
+:END:
+The server speaks LSP over stdio, which is what every editor expects.
+
+#+begin_src sh
+crispy-language-server            # started by the editor, not by hand
+crispy-language-server --version
+#+end_src
+
+*** Emacs (eglot)
+:PROPERTIES:
+:CUSTOM_ID: lsp-emacs
+:END:
+#+begin_src emacs-lisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '(c-mode . ("crispy-language-server"))))
+#+end_src
+
+*** Neovim
+:PROPERTIES:
+:CUSTOM_ID: lsp-neovim
+:END:
+#+begin_src lua
+vim.lsp.config('crispy', {
+  cmd = { 'crispy-language-server' },
+  filetypes = { 'c' },
+  root_markers = { 'compile_commands.json', '.git' },
+})
+vim.lsp.enable('crispy')
+#+end_src
+
+*** VS Code
+:PROPERTIES:
+:CUSTOM_ID: lsp-vscode
+:END:
+Any generic LSP client extension works; point its server command at
+=crispy-language-server= and its language id at =c=.
+
+** Limitations
+:PROPERTIES:
+:CUSTOM_ID: lsp-limitations
+:END:
+- =CRISPY_USE= is not resolved. Only =CRISPY_PARAMS= feeds the generated
+  compile flags, so a script that declares its dependencies through
+  =CRISPY_USE= alone shows missing-header errors in the editor while
+  compiling and running fine. Adding an equivalent =CRISPY_PARAMS= line
+  is the workaround; the =CRISPY_USE= line is also left in place rather
+  than blanked, so it appears to clangd as an ordinary =#define=.
+- Formatting, rename, and references are not proxied.
+- Only the first =CRISPY_PARAMS= define in a file is recognised.
+
+** See Also
+:PROPERTIES:
+:CUSTOM_ID: lsp-see-also
+:END:
+- [[file:scripting.org][Script Authoring Guide]] -- =CRISPY_PARAMS= and =CRISPY_USE=
+- [[file:cli.org][CLI Reference]] -- =crispy lint= for one-shot diagnostics

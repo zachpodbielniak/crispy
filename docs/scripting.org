@@ -10,6 +10,119 @@ Crispy (Crispy Really Is Super Powerful Yo) is a GLib-native C scripting tool. I
 
 The result is that you can write and execute C programs as if they were scripts, with instant startup on subsequent runs thanks to caching.
 
+** Use Cases
+:PROPERTIES:
+:CUSTOM_ID: use-cases
+:END:
+Crispy is for the cases where you want C's libraries and C's speed but
+not C's build step.
+
+- *System and admin scripting with GLib.* GIO gives you file monitoring,
+  subprocess handling, D-Bus, and network I/O with an API that is
+  pleasant to use. Crispy lets you reach for it in a 40-line script
+  instead of a project directory.
+- *Glue for C libraries you already have.* If the library ships a
+  pkg-config file, one =#define CRISPY_USE= line makes it available.
+  No bindings, no FFI, no marshalling layer -- you are calling the C API
+  directly because you are writing C.
+- *Prototyping before committing to a project.* Start as a script, get
+  it working, then =crispy install= to a native binary, or lift the file
+  into a real build when it outgrows one file.
+- *Learning and experimenting.* =crispy repl= is a C prompt: try an API,
+  check what a macro expands to, see what a struct looks like, without a
+  scratch directory and a Makefile.
+- *Performance-sensitive one-offs.* A parsing or numeric job that would
+  be slow in a scripting language runs at compiled-C speed, and after the
+  first run there is no compile step to pay for.
+- *Tests and checks in CI.* =crispy test= runs GTest functions out of a
+  single file, and =crispy lint= exits non-zero on any diagnostic.
+
+*When not to use it:* anything that has grown past one file, needs to
+ship to machines without a compiler, or needs a real dependency and
+release story. Cached artifacts are not portable between machines by
+design, and crispy is not a build system.
+
+** Supportability
+:PROPERTIES:
+:CUSTOM_ID: supportability
+:END:
+*** Platforms
+:PROPERTIES:
+:CUSTOM_ID: platforms
+:END:
+Linux. Crispy relies on =GModule= for loading, POSIX =sigaction()= for
+signal-safe temp cleanup, and =/proc=-adjacent conventions in a few
+places. It has not been tested on macOS or the BSDs, and Windows is not
+a target.
+
+=make install-deps= detects Fedora, Ubuntu/Debian, and Arch.
+
+*** Runtime requirements
+:PROPERTIES:
+:CUSTOM_ID: runtime-requirements
+:END:
+| Tool          | Needed for                                       | Required?     |
+|---------------+--------------------------------------------------+---------------|
+| =gcc=         | All compilation                                  | yes           |
+| =pkg-config=  | =CRISPY_USE=, and default GLib flags             | yes           |
+| =gdb=         | =--gdb=                                          | that flag only |
+| =gprof=       | =--profile= reports                              | that flag only |
+| =clangd=      | =crispy-language-server=                         | the LSP only  |
+
+Crispy compiles at *runtime*, so gcc and pkg-config must be present on
+every machine that runs a script. The exception is =crispy install=,
+whose output is an ordinary binary with no such requirement.
+
+*** Build requirements
+:PROPERTIES:
+:CUSTOM_ID: build-requirements
+:END:
+- glib-2.0, gobject-2.0, gio-2.0, gmodule-2.0
+- json-glib-1.0 (the language server)
+- readline (the REPL)
+- gobject-introspection-devel, only when building with =BUILD_GIR=1=
+
+The library is built as =-std=gnu89=. Scripts are not: a script is
+compiled with the toolchain's default standard, so modern C is fine in
+the code you write.
+
+*** Versioning and ABI
+:PROPERTIES:
+:CUSTOM_ID: versioning-and-abi
+:END:
+=libcrispy.so= carries an soname of =libcrispy.so.<major>=, so ABI
+breaks are signalled by a major-version bump. While the version is
+=0.x=, treat the API as unstable -- interfaces may gain vfuncs.
+
+Only the headers listed as installed are API. The =-private.h= modules
+are compiled into the library but not installed, and are free to change
+in any release.
+
+*** Cache portability
+:PROPERTIES:
+:CUSTOM_ID: cache-portability
+:END:
+Cache entries are *deliberately not portable*. The hash covers the
+compiler version and the resolved pkg-config output as well as the
+source, so a different machine, toolchain, or library version produces a
+different key. Entries from elsewhere are never wrongly reused; they are
+simply not reused. Do not ship =~/.cache/crispy= between machines and do
+not put it on a shared filesystem expecting hits.
+
+*** Known issues
+:PROPERTIES:
+:CUSTOM_ID: known-issues
+:END:
+- =crispy lint= does not strip the shebang, so it fails on any script
+  with a =#!/usr/bin/crispy= line. See [[file:cli.org::#crispy-lint][crispy lint]].
+- The language server resolves =CRISPY_PARAMS= but not =CRISPY_USE=, so a
+  script using only =CRISPY_USE= shows missing-header errors in the
+  editor while compiling fine. See [[file:lsp.org::#lsp-limitations][the LSP limitations]].
+- Watch mode monitors the script file only, not the headers it includes.
+- Staleness is judged with one-second mtime resolution; an edit in the
+  same second as the compile that cached it is not noticed. =-n= forces
+  a rebuild when that matters.
+
 ** Script Format
 :PROPERTIES:
 :CUSTOM_ID: script-format
@@ -362,6 +475,169 @@ crispy -v
 # Show license
 crispy --license
 #+end_src
+
+** Development Workflow
+:PROPERTIES:
+:CUSTOM_ID: development-workflow
+:END:
+Crispy has subcommands covering the life of a script from scaffold to
+installed binary. Full details are in the
+[[file:cli.org][CLI Reference]]; this is the shape of it.
+
+#+begin_example
+crispy new mytool          → write it      → crispy lint mytool.c
+                                           → crispy test mytool.c
+                           → crispy -w mytool.c  (iterate)
+                           → crispy install mytool.c
+#+end_example
+
+*** Starting from a template
+:PROPERTIES:
+:CUSTOM_ID: starting-from-a-template
+:END:
+=crispy new= writes a runnable script, executable bit already set:
+
+#+begin_src sh
+crispy new hello                    # glib template (the default)
+crispy new --template=cli mytool    # GOptionContext argument parsing
+crispy new --template=gtk app       # GTK skeleton with CRISPY_USE set up
+crispy new --template=minimal tiny  # shebang, <glib.h>, empty main()
+#+end_src
+
+*** Iterating
+:PROPERTIES:
+:CUSTOM_ID: iterating-workflow
+:END:
+=--watch= re-runs the script every time you save it, which is the tight
+loop for anything you are actively writing:
+
+#+begin_src sh
+crispy --watch script.c
+crispy --watch script.c arg1 arg2   # args are re-passed on every run
+#+end_src
+
+Change events are debounced by half a second, so an editor that writes a
+file in several steps causes one re-run rather than several. Note that
+the monitor is on the script file itself -- editing a header it includes
+does not trigger a re-run, though it does invalidate the cache, so
+re-saving the script picks the change up.
+
+*** Checking without running
+:PROPERTIES:
+:CUSTOM_ID: checking-without-running
+:END:
+=crispy lint= compiles with strict warnings and no output binary. It
+resolves =CRISPY_PARAMS= and =CRISPY_USE= first, so a script that depends
+on an external library is linted against that library's real headers:
+
+#+begin_src sh
+crispy lint script.c    # "No warnings." and 0, or diagnostics and 1
+#+end_src
+
+Because it exits non-zero on any diagnostic, it drops straight into a
+pre-commit hook or CI step.
+
+*Known issue:* lint compiles the file in place and does not strip the
+shebang, so a script with =#!/usr/bin/crispy= fails with =invalid
+preprocessing directive #!=. Lint a shebang-less copy until this is
+fixed -- =tail -n +2 script.c > /tmp/lint.c && crispy lint /tmp/lint.c=.
+Running, testing, and installing all strip the shebang correctly.
+
+*** Testing
+:PROPERTIES:
+:CUSTOM_ID: testing-scripts
+:END:
+Write =test_*()= functions and =crispy test= finds them, generates a
+GTest harness =main()=, and runs it. Your script's own =main()=, if it
+has one, is ignored by the harness:
+
+#+begin_src C
+#!/usr/bin/crispy
+#include <glib.h>
+
+void
+test_addition(void)
+{
+    g_assert_cmpint(2 + 2, ==, 4);
+}
+
+void
+test_string_building(void)
+{
+    g_autofree gchar *s = g_strdup_printf("%s-%d", "id", 7);
+    g_assert_cmpstr(s, ==, "id-7");
+}
+#+end_src
+
+#+begin_src sh
+crispy test mytests.c   # 0 if every test passes
+#+end_src
+
+A failing =g_assert_*= aborts, so a failed run exits 134 rather than 1.
+That is GTest's own behaviour, not crispy's.
+
+Discovery is textual -- a line declaring =void=, =int=, or =gint=
+=test_something(= is picked up -- so a test function must be written with
+its return type and name on one line.
+
+*** Shipping
+:PROPERTIES:
+:CUSTOM_ID: shipping-scripts
+:END:
+=crispy install= compiles the script to a real native executable and
+installs it to =~/.local/bin= (or =--dir=), named after the script
+without the =.c=:
+
+#+begin_src sh
+crispy install mytool.c                      # -> ~/.local/bin/mytool
+crispy install --dir=/usr/local/bin mytool.c
+#+end_src
+
+The installed binary is standalone: it does not need crispy, does not
+consult the cache, and starts like any other compiled program. The
+shebang and the =CRISPY_PARAMS= / =CRISPY_USE= defines are stripped
+before compiling, and the flags they declared are resolved into the
+build, so the binary links against exactly what the script asked for.
+
+This is the answer to "the script is finished, stop compiling it every
+time" -- crispy stops being in the picture at all.
+
+** Interactive REPL
+:PROPERTIES:
+:CUSTOM_ID: interactive-repl
+:END:
+=crispy repl= gives you a C prompt. Each line is wrapped in a function,
+compiled, loaded, and run in-process:
+
+#+begin_example
+$ crispy repl
+crispy> g_print("%d\n", 6 * 7);
+42
+crispy> #include <math.h>
+crispy> g_print("%f\n", sqrt(2.0));
+1.414214
+crispy> gint square(gint x) { return x * x; }
+crispy> g_print("%d\n", square(9));
+81
+#+end_example
+
+Preprocessor directives, function definitions, and type declarations do
+not execute. They accumulate in a *preamble* prepended to every later
+evaluation, which is why the =#include= and the =square()= above stay
+available. Statements run immediately.
+
+Input that is not yet complete -- unbalanced braces or parentheses --
+continues onto the next line; a blank line evaluates what is pending.
+
+| Command               | Effect                                     |
+|-----------------------+--------------------------------------------|
+| =:help=, =:h=         | Show the command list                      |
+| =:preamble=, =:p=     | Print the accumulated preamble             |
+| =:clear=, =:c=        | Discard the preamble and reset the session |
+| =:quit=, =:q=, =exit= | Leave (Ctrl-D also works)                  |
+
+History persists in =~/.crispy_history=. Line editing is readline's, so
+the usual key bindings apply.
 
 ** Performance Tips
 :PROPERTIES:
