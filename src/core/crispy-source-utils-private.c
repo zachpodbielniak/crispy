@@ -140,6 +140,76 @@ crispy_source_strip_header(
     return g_string_free(modified, FALSE);
 }
 
+/* --- crispy_source_blank_header --- */
+
+gchar *
+crispy_source_blank_header(
+    const gchar *source,
+    gsize       *out_len
+){
+    GString *modified;
+    gchar **lines;
+    gint i;
+    gboolean params_found;
+
+    if (source == NULL)
+    {
+        if (out_len != NULL)
+            *out_len = 0;
+        return g_strdup("");
+    }
+
+    params_found = FALSE;
+    lines = g_strsplit(source, "\n", -1);
+    modified = g_string_new(NULL);
+
+    for (i = 0; lines[i] != NULL; i++)
+    {
+        const gchar *line;
+        const gchar *p;
+        gboolean blank;
+
+        line = lines[i];
+        blank = FALSE;
+
+        /* blank the shebang on the first line */
+        if (i == 0 && g_str_has_prefix(line, "#!"))
+            blank = TRUE;
+
+        /* blank the first #define CRISPY_PARAMS line */
+        if (!blank && !params_found)
+        {
+            p = line;
+            while (*p == ' ' || *p == '\t')
+                p++;
+
+            if (g_str_has_prefix(p, "#define") &&
+                strstr(p, "CRISPY_PARAMS") != NULL)
+            {
+                params_found = TRUE;
+                blank = TRUE;
+            }
+        }
+
+        /*
+         * An emptied line rather than a dropped one: the caller is
+         * about to show the compiler's diagnostics to the user, and
+         * every line number after a dropped line would be off.
+         */
+        if (!blank)
+            g_string_append(modified, line);
+
+        g_string_append_c(modified, '\n');
+    }
+
+    g_strfreev(lines);
+
+    if (out_len != NULL)
+        *out_len = modified->len;
+
+    return g_string_free(modified, FALSE);
+}
+
 /* --- crispy_source_shell_expand --- */
 
 gchar *

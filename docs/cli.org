@@ -207,26 +207,13 @@ exits 1 otherwise.
 crispy lint script.c
 #+end_src
 
-Linting compiles the file in place rather than a stripped temp copy, so
-=#include "sibling.h"= resolves the same way it does on the run path.
+gcc is handed a copy with the shebang and =CRISPY_PARAMS= lines blanked
+out, since a shebang is not a valid preprocessing directive. The lines
+are emptied rather than deleted and the copy names the original file, so
+every diagnostic reports the script's own path and line numbers. The
+script's directory is on the include path, so =#include "sibling.h"=
+resolves the same way it does on the run path.
 
-*Known issue:* because the file is compiled in place, the shebang line is
-not stripped, and the compiler rejects it:
-
-#+begin_example
-error: invalid preprocessing directive #!
-#+end_example
-
-So =crispy lint= currently fails on any script carrying a
-=#!/usr/bin/crispy= line -- which is most of them. Until that is fixed,
-lint a copy with the shebang removed:
-
-#+begin_src sh
-tail -n +2 script.c > /tmp/lint.c && crispy lint /tmp/lint.c
-#+end_src
-
-The run, =test=, and =install= paths all strip the shebang correctly;
-this affects =lint= alone.
 
 *** crispy repl
 :PROPERTIES:

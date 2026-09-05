@@ -9,6 +9,20 @@
  * no object file or binary is produced.  All warnings and errors are
  * captured from stderr and returned to the caller.
  *
+ * gcc is not given the script itself but a temporary copy with the
+ * crispy header lines blanked out, because a shebang is not a valid
+ * preprocessing directive and gcc refuses the file outright.  Two
+ * details keep the diagnostics pointing at the real script:
+ *
+ *   - the header lines are emptied rather than deleted, so every
+ *     following line keeps its number, and
+ *   - the copy opens with a #line directive naming the original path,
+ *     so gcc reports that path and reads its source context from it.
+ *
+ * The copy lives in the temp directory, so the script's own directory
+ * is added to the include path -- otherwise a quoted #include of a
+ * sibling header would resolve against the temp directory and fail.
+ *
  * Base glib pkg-config flags are resolved at runtime by spawning
  * pkg-config rather than hard-coding paths, so the linter works
  * regardless of how glib was installed.
@@ -18,8 +32,12 @@
 #define CRISPY_COMPILATION
 #endif
 #include "crispy-linter-private.h"
+#include "crispy-source-utils-private.h"
+#include "crispy-temp-registry-private.h"
 #include "../crispy-types.h"
 #include <glib.h>
+#include <glib/gstdio.h>
+#include <unistd.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -109,6 +127,96 @@ get_glib_cflags (GError **error)
 }
 
 /* ------------------------------------------------------------------ */
+/* Internal: the #line directive naming the original file              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * escape_for_c_string:
+ * @path: a filesystem path
+ *
+ * Escapes backslashes and double quotes so @path can sit inside the
+ * quoted filename of a #line directive.
+ *
+ * Returns: (transfer full): the escaped path
+ */
+static gchar *
+escape_for_c_string (const gchar *path)
+{
+    GString *out;
+    const gchar *p;
+
+    out = g_string_new(NULL);
+
+    for (p = path; *p != '\0'; p++)
+    {
+        if (*p == '\\' || *p == '"')
+            g_string_append_c(out, '\\');
+
+        g_string_append_c(out, *p);
+    }
+
+    return g_string_free(out, FALSE);
+}
+
+/*
+ * write_lint_copy:
+ * @source_path: the script being linted
+ * @out_path: (out) (transfer full): path of the temp copy that was written
+ * @error: return location for a #GError, or %NULL
+ *
+ * Writes a temporary copy of @source_path with the crispy header lines
+ * blanked and a leading #line directive naming the original file.  The
+ * directive is numbered 1 because the line that follows it is the
+ * script's own line 1, so numbering stays aligned even though the copy
+ * has one more physical line than the script.
+ *
+ * The path is registered with the temp registry before it is written,
+ * so a signal arriving mid-lint still removes it.
+ *
+ * Returns: %TRUE on success
+ */
+static gboolean
+write_lint_copy (const gchar  *source_path,
+                 gchar       **out_path,
+                 GError      **error)
+{
+    g_autofree gchar *source = NULL;
+    g_autofree gchar *blanked = NULL;
+    g_autofree gchar *escaped = NULL;
+    g_autofree gchar *contents = NULL;
+    g_autofree gchar *tmp_path = NULL;
+    gint fd;
+
+    *out_path = NULL;
+
+    if (!g_file_get_contents(source_path, &source, NULL, error))
+        return FALSE;
+
+    fd = g_file_open_tmp("crispy-lint-XXXXXX.c", &tmp_path, error);
+    if (fd < 0)
+        return FALSE;
+
+    close(fd);
+
+    /* registered before the write, so a signal mid-write still cleans up */
+    crispy_temp_registry_add(tmp_path);
+
+    blanked  = crispy_source_blank_header(source, NULL);
+    escaped  = escape_for_c_string(source_path);
+    contents = g_strdup_printf("#line 1 \"%s\"\n%s", escaped, blanked);
+
+    if (!g_file_set_contents(tmp_path, contents, -1, error))
+    {
+        crispy_temp_registry_remove(tmp_path);
+        g_unlink(tmp_path);
+        return FALSE;
+    }
+
+    *out_path = g_steal_pointer(&tmp_path);
+    return TRUE;
+}
+
+/* ------------------------------------------------------------------ */
 /* crispy_linter_check                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -119,6 +227,8 @@ crispy_linter_check (const gchar  *source_path,
                      GError      **error)
 {
     g_autofree gchar *glib_cflags = NULL;
+    g_autofree gchar *lint_path = NULL;
+    g_autofree gchar *include_flag = NULL;
     g_autofree gchar *cmd = NULL;
     gchar *std_out = NULL;
     gchar *std_err = NULL;
@@ -139,36 +249,50 @@ crispy_linter_check (const gchar  *source_path,
     }
 
     /*
+     * gcc gets a header-blanked copy, not the script: a shebang is not
+     * a preprocessing directive and gcc rejects the file on line 1.
+     */
+    if (!write_lint_copy(source_path, &lint_path, error))
+    {
+        g_prefix_error(error, "Failed to prepare source for linting: ");
+        if (error != NULL && *error != NULL)
+        {
+            (*error)->domain = CRISPY_ERROR;
+            (*error)->code   = CRISPY_ERROR_LINT;
+        }
+        return FALSE;
+    }
+
+    /*
+     * The copy is in the temp directory, so a quoted #include of a
+     * sibling header would look there.  Point it back at the script.
+     */
+    include_flag = crispy_source_include_flag_for(source_path);
+
+    /*
      * Build the gcc command.  The -fsyntax-only flag instructs gcc to
      * perform parsing and type-checking without producing any output
      * file, which is exactly what a linter needs.
      */
     {
-        g_autofree gchar *q_path = g_shell_quote(source_path);
+        g_autofree gchar *q_path = g_shell_quote(lint_path);
 
-        if (extra_flags != NULL && extra_flags[0] != '\0')
-        {
-            cmd = g_strdup_printf(
-                "gcc -std=gnu89 -Wall -Wextra %s %s %s -fsyntax-only %s",
-                LINT_FLAGS,
-                glib_cflags,
-                extra_flags,
-                q_path);
-        }
-        else
-        {
-            cmd = g_strdup_printf(
-                "gcc -std=gnu89 -Wall -Wextra %s %s -fsyntax-only %s",
-                LINT_FLAGS,
-                glib_cflags,
-                q_path);
-        }
+        cmd = g_strdup_printf(
+            "gcc -std=gnu89 -Wall -Wextra %s %s %s %s -fsyntax-only %s",
+            LINT_FLAGS,
+            glib_cflags,
+            include_flag != NULL ? include_flag : "",
+            (extra_flags != NULL && extra_flags[0] != '\0') ? extra_flags : "",
+            q_path);
     }
 
     spawn_ok = g_spawn_command_line_sync(cmd, &std_out, &std_err,
                                          &exit_status, error);
 
     g_free(std_out);
+
+    crispy_temp_registry_remove(lint_path);
+    g_unlink(lint_path);
 
     if (!spawn_ok)
     {

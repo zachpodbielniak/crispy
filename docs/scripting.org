@@ -113,8 +113,6 @@ not put it on a shared filesystem expecting hits.
 :PROPERTIES:
 :CUSTOM_ID: known-issues
 :END:
-- =crispy lint= does not strip the shebang, so it fails on any script
-  with a =#!/usr/bin/crispy= line. See [[file:cli.org::#crispy-lint][crispy lint]].
 - The language server resolves =CRISPY_PARAMS= but not =CRISPY_USE=, so a
   script using only =CRISPY_USE= shows missing-header errors in the
   editor while compiling fine. See [[file:lsp.org::#lsp-limitations][the LSP limitations]].
@@ -536,12 +534,6 @@ crispy lint script.c    # "No warnings." and 0, or diagnostics and 1
 
 Because it exits non-zero on any diagnostic, it drops straight into a
 pre-commit hook or CI step.
-
-*Known issue:* lint compiles the file in place and does not strip the
-shebang, so a script with =#!/usr/bin/crispy= fails with =invalid
-preprocessing directive #!=. Lint a shebang-less copy until this is
-fixed -- =tail -n +2 script.c > /tmp/lint.c && crispy lint /tmp/lint.c=.
-Running, testing, and installing all strip the shebang correctly.
 
 *** Testing
 :PROPERTIES:

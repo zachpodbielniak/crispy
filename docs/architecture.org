@@ -396,7 +396,7 @@ Crispy supports a C-based configuration file that is compiled and loaded using c
 
 Tier 0 is built by =build_compile_flags()= in =crispy-script.c= and covers the two things that decide how a script compiles but are written nowhere in =CRISPY_PARAMS=:
 
-- =-I<the script's own directory>=, because compilation happens on a stripped copy in the temp directory. Without it =#include "sibling.h"= could not resolve on the path that runs a script, while =crispy lint= -- which compiles the file in place -- reported the script clean.
+- =-I<the script's own directory>=, because compilation happens on a stripped copy in the temp directory. Without it =#include "sibling.h"= could not resolve on the path that runs a script, while =crispy lint= -- which compiled the file in place -- reported the script clean. =lint= now works from a copy too, for the shebang's sake, and so it adds the same flag.
 - the flags resolved from =#define CRISPY_USE=. =lint=, =test= and =install= each resolved it and the runner did not, so a script that linted clean failed to compile on the header it had already declared.
 
 One function builds this for both compiles crispy performs: the ordinary shared object and the executable that =--gdb= and =--profile= need.
@@ -480,7 +480,7 @@ change shape between releases.
 | =error-analyzer=      | Reads a failed compile's stderr and suggests the pkg-config package    |
 | =profiler=            | Supplies =-pg=, runs =gprof=, cleans up =gmon.out= (=--profile=)       |
 | =scaffolder=          | The built-in templates behind =crispy new=                            |
-| =linter=              | Strict-warning compile with no output binary (=crispy lint=)          |
+| =linter=              | Strict-warning =-fsyntax-only= pass over a header-blanked copy         |
 | =installer=           | Compiles to a native binary and installs it (=crispy install=)        |
 | =test-runner=         | Discovers =test_*()=, generates a GTest harness (=crispy test=)       |
 | =config-loader=       | Finds, compiles, and loads =config.c=; resolves =crispy_config_init=  |
@@ -502,7 +502,7 @@ The dividing line is deliberate: *if a reasonable person might want to
 swap it out, it is an interface; if they would only ever want to use it,
 it is private.*
 
-*** Two things worth knowing about them
+*** Three things worth knowing about them
 :PROPERTIES:
 :CUSTOM_ID: private-notes
 :END:
@@ -511,6 +511,16 @@ it scans stderr for =fatal error: foo/foo.h: No such file or directory=
 and maps the header back to the pkg-config package that provides it, so
 the message a user gets names the =CRISPY_USE= line they should have
 written rather than only the header they were missing.
+
+The *linter* cannot hand gcc the script, because a shebang is not a
+preprocessing directive and gcc rejects the file on line 1. It compiles a
+copy instead, and two details keep the diagnostics honest: the header
+lines are *blanked rather than deleted*, so nothing after them shifts,
+and the copy opens with a =#line= directive naming the original file, so
+gcc reports the script's own path and reads its source context from it.
+Deleting the lines, the way the run path does, would silently renumber
+every diagnostic -- which for a tool whose entire output is line numbers
+is worse than the bug it fixes.
 
 The *header tracker* is why the cache is not simply "artifact newer than
 script". gcc is asked for a depfile, which is published alongside the

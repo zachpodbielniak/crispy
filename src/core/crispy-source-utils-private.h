@@ -42,6 +42,28 @@ gchar *crispy_source_strip_header (const gchar *source,
                                    gsize       *out_len);
 
 /**
+ * crispy_source_blank_header:
+ * @source: full source text of a C file
+ * @out_len: (out) (optional): location to store the length of the
+ *           returned string, or %NULL
+ *
+ * Returns a copy of @source with the same lines removed as
+ * crispy_source_strip_header() -- the shebang and the first
+ * `#define CRISPY_PARAMS` -- but replaced with empty lines rather
+ * than deleted, so the line count and every following line number
+ * are unchanged.
+ *
+ * This is what a caller wants when the compiler's output is going to
+ * be shown to the user, since a deleted line shifts every diagnostic
+ * after it.  Keep the recognition rules here in step with
+ * crispy_source_strip_header().
+ *
+ * Returns: (transfer full): the modified source text
+ */
+gchar *crispy_source_blank_header (const gchar *source,
+                                   gsize       *out_len);
+
+/**
  * crispy_source_shell_expand:
  * @params: raw CRISPY_PARAMS value to expand
  * @error: return location for a #GError, or %NULL
