@@ -1,4 +1,5 @@
 /* test-repl.c - Tests for CrispyRepl */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 
 #define CRISPY_COMPILATION
 #include "../src/crispy.h"
@@ -411,7 +412,7 @@ test_repl_typedef_preamble(void)
 
     /* use the typedef in a subsequent eval */
     result = crispy_repl_eval(repl,
-        "Point p = {3, 4}; g_print(\"(%d,%d)\\n\", p.x, p.y);", &error);
+        "{ Point p = {3, 4}; g_print(\"(%d,%d)\\n\", p.x, p.y); }", &error);
     g_assert_no_error(error);
     g_assert_cmpint(result, ==, 0);
 }
@@ -449,6 +450,246 @@ test_repl_eval_empty(void)
     result = crispy_repl_eval(repl, "   ", &error);
     g_assert_cmpint(result, >=, 0);
     g_clear_error(&error);
+}
+
+/* Assert both halves of the public return contract, including nonzero C returns. */
+static void
+assert_eval(CrispyRepl *repl, const gchar *code, gint expected)
+{
+    g_autoptr(GError) error = NULL;
+    gint result;
+
+    result = crispy_repl_eval(repl, code, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(result, ==, expected);
+}
+
+/* Storage addresses, literal modules and heap pointers survive without replay. */
+static void
+test_repl_session_storage(void)
+{
+    g_autoptr(CrispyRepl) repl = NULL;
+
+    repl = crispy_repl_new(CRISPY_COMPILER(g_compiler), CRISPY_CACHE_PROVIDER(g_cache));
+    crispy_repl_set_extra_flags(repl, "-Wall -Wextra -Werror");
+    assert_eval(repl, "  gchar *name = \"blah\";  ", 0);
+    assert_eval(repl, "g_print(\"%s\\n\", name);", 0);
+    assert_eval(repl, "g_assert_cmpstr(name, ==, \"blah\");", 0);
+    assert_eval(repl, "gint count = 0;", 0);
+    assert_eval(repl, "gint *address = &count;", 0);
+    assert_eval(repl, "count++;", 0);
+    assert_eval(repl, "count++;", 0);
+    assert_eval(repl, "return count;", 2);
+    assert_eval(repl, "count = 17;", 0);
+    assert_eval(repl, "g_assert_true(address == &count); return *address;", 17);
+    assert_eval(repl, "gchar *heap = (count++, g_strdup(name));", 0);
+    assert_eval(repl, "gchar *saved = heap;", 0);
+    assert_eval(repl, "heap[0] = 'B';", 0);
+    assert_eval(repl, "g_assert_true(saved == heap); g_assert_cmpstr(heap, ==, \"Blah\"); return count;", 18);
+    assert_eval(repl, "name = \"a later module's literal\";", 0);
+    assert_eval(repl, "g_assert_cmpstr(name, ==, \"a later module's literal\");", 0);
+    assert_eval(repl, "g_free(heap); heap = NULL; saved = NULL;", 0);
+    assert_eval(repl, "return count;", 18);
+    assert_eval(repl, "gdouble fraction = 1.25;", 0);
+    assert_eval(repl, "fraction *= 2;", 0);
+    assert_eval(repl, "g_assert_cmpfloat(fraction, ==, 2.5);", 0);
+    assert_eval(repl, "gint zero;", 0);
+    assert_eval(repl, "return zero;", 0);
+    assert_eval(repl, "gchar letter = 'a';", 0);
+    assert_eval(repl, "g_assert_cmpint(letter, ==, 'a');", 0);
+    assert_eval(repl, "gint*compact=&count;", 0);
+    assert_eval(repl, "return *compact;", 18);
+    assert_eval(repl, "/* comment */ gchar *punctuation = \";{},\\\" /* text */\"; /* end */", 0);
+    assert_eval(repl, "g_assert_cmpstr(punctuation, ==, \";{},\\\" /* text */\");", 0);
+    assert_eval(repl, "const gchar *literal = \"constant pointee\";", 0);
+    assert_eval(repl, "g_assert_cmpstr(literal, ==, \"constant pointee\");", 0);
+    assert_eval(repl, "return -1;", -1);
+}
+
+/* Identical cache inputs must not cause two instances to share module data. */
+static void
+test_repl_session_isolation(void)
+{
+    g_autoptr(CrispyRepl) first = NULL;
+    g_autoptr(CrispyRepl) second = NULL;
+
+    first = crispy_repl_new(CRISPY_COMPILER(g_compiler), CRISPY_CACHE_PROVIDER(g_cache));
+    second = crispy_repl_new(CRISPY_COMPILER(g_compiler), CRISPY_CACHE_PROVIDER(g_cache));
+    assert_eval(first, "gint count = 0;", 0);
+    assert_eval(second, "gint count = 0;", 0);
+    assert_eval(first, "count++;", 0);
+    assert_eval(first, "int read_count(void) { return count; }", 0);
+    assert_eval(second, "int read_count(void) { return count; }", 0);
+    assert_eval(first, "return read_count();", 1);
+    assert_eval(first, "int write_count(void) { count = 9; return count; }", 0);
+    assert_eval(first, "return write_count();", 9);
+    assert_eval(second, "return read_count();", 0);
+    crispy_repl_reset(first);
+    assert_eval(first, "gint count = 0;", 0);
+    assert_eval(first, "return count;", 0);
+    g_clear_object(&first);
+    assert_eval(second, "count = 23;", 0);
+    assert_eval(second, "return read_count();", 23);
+}
+
+/* Rejected declarations and failed preamble edits leave usable session state. */
+static void
+test_repl_session_errors(void)
+{
+    g_autoptr(CrispyRepl) repl = NULL;
+    g_autoptr(GError) error = NULL;
+    const gchar *invalid[] = {
+        "gint count = 99;", "gint broken = (count++, missing_symbol);",
+        "gint items[2];", "gint one = 1, two = 2;",
+        "gint local = 1; count++;", "count++; gint local = 1;",
+        "static gint local = 1;", "g_autofree gchar *local = g_strdup(\"x\");",
+        "gint (*callback)(void);", "typedef garbage broken;",
+        "#include <crispy_nonexistent_header.h>",
+        "int broken(void) { return missing_symbol; }",
+        "struct Pair { int x; } pair;",
+        "{} gint local = 1;", "gint(local);",
+        "typedef gint Alias; gint local = 1;",
+        "#include <stdio.h>\ngint local = 1;",
+        "int helper(void) { return 0; } gint local = 1;",
+        "gint local; /* unfinished", "gchar *local = \"unfinished",
+        "Pair aggregate;", "Numbers array;",
+        NULL
+    };
+    guint i;
+
+    repl = crispy_repl_new(CRISPY_COMPILER(g_compiler), CRISPY_CACHE_PROVIDER(g_cache));
+    assert_eval(repl, "gint count = 3;", 0);
+    assert_eval(repl, "typedef struct { gint x; } Pair;", 0);
+    assert_eval(repl, "typedef gint Numbers[2];", 0);
+    for (i = 0; invalid[i] != NULL; i++)
+    {
+        g_test_message("Reject: %s", invalid[i]);
+        g_assert_cmpint(crispy_repl_eval(repl, invalid[i], &error), ==, -1);
+        g_assert_nonnull(error);
+        g_clear_error(&error);
+        assert_eval(repl, "return count;", 3);
+    }
+    assert_eval(repl, "gint broken = 8;", 0);
+    assert_eval(repl, "typedef gint Counter;", 0);
+    assert_eval(repl, "Counter alias = count;", 0);
+    assert_eval(repl, "return alias;", 3);
+    assert_eval(repl, "struct Opaque;", 0);
+    assert_eval(repl, "struct Opaque *opaque = NULL;", 0);
+    assert_eval(repl, "g_assert_null(opaque);", 0);
+    crispy_repl_reset(repl);
+    g_assert_cmpint(crispy_repl_eval(repl, "return count;", &error), ==, -1);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    assert_eval(repl, "gint count = 4;", 0);
+    assert_eval(repl, "return count;", 4);
+}
+
+/* Continuation is a lexical hint over the entire buffer, not a C parser. */
+static void
+test_repl_needs_continuation(void)
+{
+    const struct {
+        const gchar *code;
+        gboolean expected;
+    } cases[] = {
+        { "", FALSE },
+        { " \t\n", FALSE },
+        { "gint count = 0;", FALSE },
+        { "gchar *name = \"blah\";", FALSE },
+        { "count++;", FALSE },
+        { "count = 2; /* done */", FALSE },
+        { "gint count =", TRUE },
+        { "count = \t /* value follows */", TRUE },
+        { "count = // value follows\n", TRUE },
+        { "gint a = 1,", TRUE },
+        { "gint a = 1, /* another */\n", TRUE },
+        { "#define VALUE \\", TRUE },
+        { "#define VALUE \\\n", TRUE },
+        { "#define VALUE \\\r\n", TRUE },
+        { "#define VALUE \\\n42", FALSE },
+        { "g_print(", TRUE },
+        { "g_print(\"%d\", values[", TRUE },
+        { "g_print(\"%d\", values[0]);", FALSE },
+        { "{\n if (values[0]) {", TRUE },
+        { "{\n if (values[0]) {}\n}", FALSE },
+        { "([)]", FALSE },
+        { ")(", FALSE },
+        { "}", FALSE },
+        { "\"unclosed", TRUE },
+        { "'x", TRUE },
+        { "\"escaped quote \\\"", TRUE },
+        { "\"escaped quote \\\" end\"", FALSE },
+        { "\"escaped slash \\\\\"", FALSE },
+        { "'\\''", FALSE },
+        { "'\\\\'", FALSE },
+        { "\"({[=,\"", FALSE },
+        { "'{'", FALSE },
+        { "/* unclosed", TRUE },
+        { "/* ( ' \"\n still open", TRUE },
+        { "/* ( ' \"\n closed */", FALSE },
+        { "// ({[\"'=,", FALSE },
+        { "// comment \\", TRUE },
+        { "// (\ncount++;", FALSE },
+        { "{ // }\n}", FALSE },
+        { "{ /* }\n */", TRUE },
+        { "{ /* }\n */ }", FALSE },
+        { "// comment \\\n( ignored\ncount++;", FALSE },
+        { "/\\\n* open comment", TRUE },
+        { "/* closed *\\\n/", FALSE },
+        { "\"joined \\\nstring\";", FALSE },
+        { "gint count", FALSE }
+    };
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS(cases); i++)
+    {
+        g_test_message("Continuation case %u: %s", i, cases[i].code);
+        g_assert_cmpint(crispy_repl_needs_continuation(cases[i].code),
+                        ==, cases[i].expected);
+    }
+}
+
+/* Embedders can route mutations using the authoritative session registry. */
+static void
+test_repl_has_variable(void)
+{
+    g_autoptr(CrispyRepl) repl = NULL;
+    g_autoptr(CrispyRepl) other = NULL;
+    g_autoptr(GError) error = NULL;
+
+    repl = crispy_repl_new(CRISPY_COMPILER(g_compiler), CRISPY_CACHE_PROVIDER(g_cache));
+    other = crispy_repl_new(CRISPY_COMPILER(g_compiler), CRISPY_CACHE_PROVIDER(g_cache));
+    g_assert_false(crispy_repl_has_variable(repl, "count"));
+    g_assert_false(crispy_repl_has_variable(repl, ""));
+    assert_eval(repl, "gint count = 0;", 0);
+    assert_eval(repl, "gchar *name = \"blah\";", 0);
+    g_assert_true(crispy_repl_has_variable(repl, "count"));
+    g_assert_true(crispy_repl_has_variable(repl, "name"));
+    g_assert_false(crispy_repl_has_variable(repl, "Count"));
+    g_assert_false(crispy_repl_has_variable(repl, "count++"));
+    g_assert_false(crispy_repl_has_variable(repl, " count"));
+    g_assert_false(crispy_repl_has_variable(other, "count"));
+    assert_eval(repl, "count++;", 0);
+    assert_eval(repl, "count = 2;", 0);
+    g_assert_true(crispy_repl_has_variable(repl, "count"));
+    g_assert_cmpint(crispy_repl_eval(repl, "gint broken = missing;", &error), ==, -1);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    g_assert_false(crispy_repl_has_variable(repl, "broken"));
+    g_assert_true(crispy_repl_has_variable(repl, "count"));
+    assert_eval(repl, "{ gint temporary = count; g_assert_cmpint(temporary, ==, 2); }", 0);
+    assert_eval(repl, "#define MACRO 2", 0);
+    assert_eval(repl, "typedef gint Counter;", 0);
+    assert_eval(repl, "gint helper(void) { return count; }", 0);
+    g_assert_false(crispy_repl_has_variable(repl, "temporary"));
+    g_assert_false(crispy_repl_has_variable(repl, "MACRO"));
+    g_assert_false(crispy_repl_has_variable(repl, "Counter"));
+    g_assert_false(crispy_repl_has_variable(repl, "helper"));
+    crispy_repl_reset(repl);
+    g_assert_false(crispy_repl_has_variable(repl, "count"));
+    g_assert_false(crispy_repl_has_variable(repl, "name"));
+    assert_eval(repl, "gint count = 7;", 0);
+    g_assert_true(crispy_repl_has_variable(repl, "count"));
 }
 
 gint
@@ -511,6 +752,11 @@ main(
                     test_repl_eval_empty);
     g_test_add_func("/repl/typedef-preamble",
                     test_repl_typedef_preamble);
+    g_test_add_func("/repl/session-storage", test_repl_session_storage);
+    g_test_add_func("/repl/session-isolation", test_repl_session_isolation);
+    g_test_add_func("/repl/session-errors", test_repl_session_errors);
+    g_test_add_func("/repl/needs-continuation", test_repl_needs_continuation);
+    g_test_add_func("/repl/has-variable", test_repl_has_variable);
 
     return g_test_run();
 }

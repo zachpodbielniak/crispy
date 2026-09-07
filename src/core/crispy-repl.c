@@ -11,7 +11,8 @@
  * compiled as a shared library, loaded with g_module_open(), and
  * executed.  Lines that begin with #include, #define, or that define
  * functions/types are accumulated into a preamble prepended to every
- * subsequent evaluation.
+ * subsequent evaluation. Scalar/pointer declarations instead own stable
+ * module storage, bound into later modules without replaying initializers.
  *
  * Features:
  *   - readline support for line editing and persistent history
@@ -28,6 +29,7 @@
 #include "crispy-repl.h"
 #include "crispy-script.h"
 #include "crispy-temp-registry-private.h"
+#include "crispy-header-tracker-private.h"
 #include "../interfaces/crispy-compiler.h"
 #include "../interfaces/crispy-cache-provider.h"
 #include "../crispy-types.h"
@@ -81,6 +83,9 @@ struct _CrispyRepl
     gchar               *cont_prompt;    /* continuation prompt for multiline */
     gchar               *extra_flags;
     GString             *preamble;       /* accumulated #include / #define / functions */
+    GPtrArray           *modules;        /* retained, newest unloaded first */
+    GPtrArray           *storage;        /* borrowed addresses inside modules */
+    GHashTable          *names;
     guint                eval_count;     /* unique temp file counter */
 };
 
@@ -147,6 +152,10 @@ crispy_repl_finalize(
 
     self = CRISPY_REPL(object);
 
+    crispy_repl_reset(self);
+    g_ptr_array_unref(self->modules);
+    g_ptr_array_unref(self->storage);
+    g_hash_table_unref(self->names);
     g_clear_object(&self->compiler);
     g_clear_object(&self->cache);
 
@@ -234,6 +243,9 @@ crispy_repl_init(
     self->prompt      = g_strdup("crispy> ");
     self->cont_prompt = g_strdup("  ...>  ");
     self->preamble    = g_string_new(NULL);
+    self->modules     = g_ptr_array_new();
+    self->storage     = g_ptr_array_new();
+    self->names       = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     self->eval_count  = 0;
 }
 
@@ -301,6 +313,16 @@ crispy_repl_reset(
     g_return_if_fail(CRISPY_IS_REPL(self));
 
     g_string_truncate(self->preamble, 0);
+    g_ptr_array_set_size(self->storage, 0);
+    g_hash_table_remove_all(self->names);
+    while (self->modules->len != 0)
+    {
+        GModule *module;
+
+        module = g_ptr_array_index(self->modules, self->modules->len - 1);
+        g_ptr_array_set_size(self->modules, self->modules->len - 1);
+        g_module_close(module);
+    }
     self->eval_count = 0;
 }
 
@@ -313,82 +335,121 @@ crispy_repl_get_preamble(
 }
 
 /* ------------------------------------------------------------------ */
-/* helpers: brace depth tracking for multiline input                    */
+/* public helpers for embedding interactive sessions                   */
 /* ------------------------------------------------------------------ */
 
-/*
- * compute_depth_delta:
- * @line: a line of C code
- *
- * Counts unmatched opening/closing braces, parens, and brackets,
- * ignoring those inside string literals, char literals, and comments.
- *
- * Returns: net depth change (positive = more opens, negative = more closes)
- */
-static gint
-compute_depth_delta(
-    const gchar *line
+gboolean
+crispy_repl_has_variable(
+    CrispyRepl *self,
+    const gchar *name
 ){
-    gint   delta;
-    gint   i;
-    gint   len;
-    gchar  c;
+    g_return_val_if_fail(CRISPY_IS_REPL(self), FALSE);
+    g_return_val_if_fail(name != NULL, FALSE);
 
-    delta = 0;
-    len   = (gint)strlen(line);
+    /* Only successfully committed declarations belong to this registry. */
+    return g_hash_table_contains(self->names, name);
+}
 
-    for (i = 0; i < len; i++)
+gboolean
+crispy_repl_needs_continuation(
+    const gchar *code
+){
+    g_autoptr(GString) logical = NULL;
+    g_autoptr(GString) stack = NULL;
+    gsize i;
+    gchar quote;
+    gchar last;
+    gboolean block_comment;
+    gboolean line_comment;
+    gboolean trailing_splice;
+
+    g_return_val_if_fail(code != NULL, FALSE);
+
+    /* C removes escaped newlines before recognizing comments and literals.
+     * Do the same, including CRLF input supplied by an embedding caller. */
+    logical = g_string_new(NULL);
+    trailing_splice = FALSE;
+    for (i = 0; code[i] != '\0'; i++)
     {
-        c = line[i];
-
-        /* skip string literals */
-        if (c == '"')
+        if (code[i] == '\\' &&
+            (code[i + 1] == '\n' ||
+             (code[i + 1] == '\r' && code[i + 2] == '\n')))
         {
-            i++;
-            while (i < len && line[i] != '"')
-            {
-                if (line[i] == '\\')
-                    i++;
-                i++;
-            }
+            i += code[i + 1] == '\r' ? 2 : 1;
+            trailing_splice = TRUE;
             continue;
         }
-
-        /* skip char literals */
-        if (c == '\'')
-        {
-            i++;
-            while (i < len && line[i] != '\'')
-            {
-                if (line[i] == '\\')
-                    i++;
-                i++;
-            }
-            continue;
-        }
-
-        /* skip line comments */
-        if (c == '/' && i + 1 < len && line[i + 1] == '/')
-            break;
-
-        /* skip block comments */
-        if (c == '/' && i + 1 < len && line[i + 1] == '*')
-        {
-            i += 2;
-            while (i + 1 < len && !(line[i] == '*' && line[i + 1] == '/'))
-                i++;
-            if (i + 1 < len)
-                i++; /* skip past '/', for-loop will advance past it */
-            continue;
-        }
-
-        if (c == '{' || c == '(' || c == '[')
-            delta++;
-        else if (c == '}' || c == ')' || c == ']')
-            delta--;
+        g_string_append_c(logical, code[i]);
+        if (!g_ascii_isspace(code[i]))
+            trailing_splice = code[i] == '\\';
     }
 
-    return delta;
+    stack = g_string_new(NULL);
+    quote = 0;
+    last = 0;
+    block_comment = FALSE;
+    line_comment = FALSE;
+    for (i = 0; i < logical->len; i++)
+    {
+        gchar c;
+
+        c = logical->str[i];
+        if (line_comment)
+        {
+            if (c == '\n')
+                line_comment = FALSE;
+            continue;
+        }
+        if (block_comment)
+        {
+            if (c == '*' && logical->str[i + 1] == '/')
+            {
+                i++;
+                block_comment = FALSE;
+            }
+            continue;
+        }
+        if (quote != 0)
+        {
+            if (c == '\\' && i + 1 < logical->len)
+                i++;
+            else if (c == quote)
+                quote = 0;
+            continue;
+        }
+        if (c == '/' && logical->str[i + 1] == '/')
+        {
+            line_comment = TRUE;
+            i++;
+            continue;
+        }
+        if (c == '/' && logical->str[i + 1] == '*')
+        {
+            block_comment = TRUE;
+            i++;
+            continue;
+        }
+        if (g_ascii_isspace(c))
+            continue;
+        last = c;
+        if (c == '"' || c == '\'')
+            quote = c;
+        if (c == '{' || c == '(' || c == '[')
+            g_string_append_c(stack, c);
+        else if (c == '}' || c == ')' || c == ']')
+        {
+            gchar expected;
+
+            expected = c == '}' ? '{' : (c == ')' ? '(' : '[');
+            /* More input cannot repair a mismatched closing delimiter. */
+            if (stack->len == 0 || stack->str[stack->len - 1] != expected)
+                return FALSE;
+            g_string_truncate(stack, stack->len - 1);
+        }
+    }
+
+    return stack->len != 0 || quote != 0 || block_comment ||
+           trailing_splice || last == '=' || last == ',' || last == '\\';
 }
 
 /* ------------------------------------------------------------------ */
@@ -449,75 +510,22 @@ is_preamble_code(
 
     /* type/struct/enum/union declarations */
     if (g_str_has_prefix(code, "typedef ") ||
-        g_str_has_prefix(code, "struct ") ||
-        g_str_has_prefix(code, "enum ") ||
-        g_str_has_prefix(code, "union "))
+        g_regex_match_simple("^(struct|union|enum)\\s+[A-Za-z_][A-Za-z_0-9]*\\s*;\\s*$", code, 0, 0) ||
+        ((g_str_has_prefix(code, "struct ") ||
+          g_str_has_prefix(code, "enum ") ||
+          g_str_has_prefix(code, "union ")) &&
+         strchr(code, '{') != NULL &&
+         g_regex_match_simple("}\\s*;\\s*$", code, 0, 0)))
     {
         return TRUE;
     }
 
-    /*
-     * Function definitions: heuristic detection.  A function definition
-     * has the pattern:  [static] type name(...) {
-     * We check if the code contains a '{' and a '(' and starts with
-     * what looks like a type keyword.  This is imperfect but covers
-     * the common cases.
-     */
-    if (strchr(code, '(') != NULL && strchr(code, '{') != NULL)
-    {
-        const gchar *p;
-
-        p = code;
-
-        /* skip "static " or "inline " */
-        if (g_str_has_prefix(p, "static "))
-            p += 7;
-        if (g_str_has_prefix(p, "inline "))
-            p += 7;
-
-        /* common return type prefixes that indicate a function definition */
-        if (g_str_has_prefix(p, "void ") ||
-            g_str_has_prefix(p, "int ") ||
-            g_str_has_prefix(p, "gint ") ||
-            g_str_has_prefix(p, "guint ") ||
-            g_str_has_prefix(p, "gboolean ") ||
-            g_str_has_prefix(p, "gchar ") ||
-            g_str_has_prefix(p, "char ") ||
-            g_str_has_prefix(p, "long ") ||
-            g_str_has_prefix(p, "short ") ||
-            g_str_has_prefix(p, "unsigned ") ||
-            g_str_has_prefix(p, "signed ") ||
-            g_str_has_prefix(p, "float ") ||
-            g_str_has_prefix(p, "double ") ||
-            g_str_has_prefix(p, "gchar *") ||
-            g_str_has_prefix(p, "char *") ||
-            g_str_has_prefix(p, "const ") ||
-            g_str_has_prefix(p, "gpointer ") ||
-            g_str_has_prefix(p, "gconstpointer ") ||
-            g_str_has_prefix(p, "gsize ") ||
-            g_str_has_prefix(p, "gssize ") ||
-            g_str_has_prefix(p, "GList ") ||
-            g_str_has_prefix(p, "GSList ") ||
-            g_str_has_prefix(p, "GPtrArray ") ||
-            g_str_has_prefix(p, "GHashTable ") ||
-            g_str_has_prefix(p, "GString ") ||
-            g_str_has_prefix(p, "GBytes ") ||
-            g_str_has_prefix(p, "GObject ") ||
-            g_str_has_prefix(p, "GFile ") ||
-            g_str_has_prefix(p, "GVariant ") ||
-            g_str_has_prefix(p, "FILE ") ||
-            g_str_has_prefix(p, "size_t ") ||
-            g_str_has_prefix(p, "ssize_t ") ||
-            g_str_has_prefix(p, "gint64 ") ||
-            g_str_has_prefix(p, "guint64 ") ||
-            g_str_has_prefix(p, "gdouble ") ||
-            g_str_has_prefix(p, "gfloat "))
-        {
-            return TRUE;
-        }
-    }
-
-    return FALSE;
+    /* Require a return type and a named function before the opening brace,
+     * not merely a call and a brace somewhere in a runtime initializer. */
+    return g_regex_match_simple(
+        "^[A-Za-z_][A-Za-z_0-9\\s*]*[\\s*]+"
+        "[A-Za-z_][A-Za-z_0-9]*\\s*\\([^;={}]*\\)\\s*\\{",
+        code, 0, 0);
 }
 
 /*
@@ -787,6 +795,22 @@ try_compile_source(
     gint              fd;
     gsize             src_len;
     gssize            written;
+    g_autoptr(GString) bound_source = NULL;
+    g_autofree gchar *nonce = NULL;
+    guint i;
+
+    /* A distinct pathname prevents dlopen from sharing writable module data,
+     * even for identical inputs in two sessions using the same cache. */
+    nonce = g_uuid_string_random();
+    bound_source = g_string_new(source);
+    g_string_append_printf(bound_source, "\n/* instance %s */\n", nonce);
+    g_string_append(bound_source,
+        "void _crispy_bind(void **slots) { (void)slots;\n");
+    for (i = 0; i < self->storage->len; i++)
+        g_string_append_printf(bound_source,
+            "_crispy_slot_%u = slots[%u];\n", i, i);
+    g_string_append(bound_source, "}\n");
+    source = bound_source->str;
 
     /* write source to temp file */
     {
@@ -855,6 +879,19 @@ try_compile_source(
     return so_path;
 }
 
+/* Unique REPL artifacts cannot be reused; unlink after loading (the mapping
+ * stays valid until g_module_close), or after preamble validation. */
+static void
+remove_session_artifact(
+    const gchar *so_path
+){
+    g_autofree gchar *dep_path = NULL;
+
+    dep_path = crispy_header_tracker_get_depfile_path(so_path);
+    g_unlink(dep_path);
+    g_unlink(so_path);
+}
+
 /*
  * execute_module:
  *
@@ -862,20 +899,40 @@ try_compile_source(
  */
 static gint
 execute_module(
+    CrispyRepl   *self,
     const gchar  *so_path,
+    gpointer     *storage,
     GError      **error
 ){
     GModule        *module;
     CrispyEvalFunc  eval_func;
     gint            exit_code;
+    void          (*bind_func)(gpointer *);
+    gpointer      (*storage_func)(void);
 
-    module = g_module_open(so_path, G_MODULE_BIND_LAZY);
+    module = g_module_open(so_path, G_MODULE_BIND_LOCAL);
+    remove_session_artifact(so_path);
     if (module == NULL)
     {
         g_set_error(error, CRISPY_ERROR, CRISPY_ERROR_LOAD,
                     "Failed to load module: %s", g_module_error());
         return -1;
     }
+
+    bind_func = NULL;
+    storage_func = NULL;
+    if (!g_module_symbol(module, "_crispy_bind", (gpointer *)&bind_func) ||
+        (storage != NULL && !g_module_symbol(module, "_crispy_get_storage",
+                                             (gpointer *)&storage_func)))
+    {
+        g_set_error(error, CRISPY_ERROR, CRISPY_ERROR_LOAD,
+                    "Missing REPL storage binding entry point");
+        g_module_close(module);
+        return -1;
+    }
+    bind_func(self->storage->pdata);
+    if (storage != NULL)
+        *storage = storage_func();
 
     eval_func = NULL;
     if (!g_module_symbol(module, "_crispy_eval", (gpointer *)&eval_func) ||
@@ -897,7 +954,7 @@ execute_module(
     fflush(stdout);
     fflush(stderr);
 
-    g_module_close(module);
+    g_ptr_array_add(self->modules, module);
     return exit_code;
 }
 
@@ -985,6 +1042,242 @@ format_gcc_error(
 /* crispy_repl_eval                                                     */
 /* ------------------------------------------------------------------ */
 
+/* Recognize a deliberately small declaration grammar, not all of C. Mask
+ * comments and literals before examining delimiters, preserving offsets into
+ * the original initializer. Explicit brace blocks retain ordinary C locals. */
+static gchar *
+mask_session_code(
+    const gchar *code
+){
+    gchar *masked;
+    gsize i;
+    gchar quote;
+    gboolean block_comment;
+    gboolean line_comment;
+
+    masked = g_strdup(code);
+    quote = 0;
+    block_comment = FALSE;
+    line_comment = FALSE;
+    for (i = 0; code[i] != '\0'; i++)
+    {
+        if (line_comment)
+        {
+            masked[i] = ' ';
+            if (code[i] == '\n')
+                line_comment = FALSE;
+        }
+        else if (block_comment)
+        {
+            masked[i] = ' ';
+            if (code[i] == '*' && code[i + 1] == '/')
+            {
+                masked[++i] = ' ';
+                block_comment = FALSE;
+            }
+        }
+        else if (quote != 0)
+        {
+            masked[i] = '0';
+            if (code[i] == '\\' && code[i + 1] != '\0')
+                masked[++i] = '0';
+            else if (code[i] == quote)
+                quote = 0;
+        }
+        else if (code[i] == '/' && code[i + 1] == '*')
+        {
+            masked[i] = masked[i + 1] = ' ';
+            i++;
+            block_comment = TRUE;
+        }
+        else if (code[i] == '/' && code[i + 1] == '/')
+        {
+            masked[i] = masked[i + 1] = ' ';
+            i++;
+            line_comment = TRUE;
+        }
+        else if (code[i] == '\'' || code[i] == '"')
+        {
+            quote = code[i];
+            /* Keep a non-whitespace marker so a literal is a statement. */
+            masked[i] = '0';
+        }
+    }
+
+    if (quote != 0 || block_comment)
+    {
+        g_free(masked);
+        return NULL;
+    }
+    return masked;
+}
+
+/* One file-scope definition/directive per call prevents an appended variable
+ * from slipping into the textual preamble and getting reinitialized later. */
+static gboolean
+validate_preamble(
+    const gchar *code,
+    GError **error
+){
+    g_autofree gchar *masked = NULL;
+    gsize i;
+    gint depth;
+    gboolean finished;
+
+    masked = mask_session_code(code);
+    if (masked == NULL)
+        goto unsupported;
+    depth = 0;
+    finished = FALSE;
+    for (i = 0; masked[i] != '\0'; i++)
+    {
+        if (finished && !g_ascii_isspace(masked[i]))
+            goto unsupported;
+        if (code[0] == '#')
+        {
+            if (code[i] == '\n' && (i == 0 || code[i - 1] != '\\'))
+                finished = TRUE;
+            continue;
+        }
+        if (masked[i] == '{' || masked[i] == '(' || masked[i] == '[')
+            depth++;
+        if (masked[i] == '}' || masked[i] == ')' || masked[i] == ']')
+            depth--;
+        if (depth == 0 && masked[i] == ';')
+            finished = TRUE;
+        if (depth == 0 && masked[i] == '}' &&
+            !g_str_has_prefix(code, "typedef ") &&
+            !g_str_has_prefix(code, "struct ") &&
+            !g_str_has_prefix(code, "union ") &&
+            !g_str_has_prefix(code, "enum "))
+            finished = TRUE;
+    }
+    return TRUE;
+
+unsupported:
+    g_set_error(error, CRISPY_ERROR, CRISPY_ERROR_REPL,
+                "Use one preprocessor directive, type or function definition per eval; "
+                "do not mix preamble definitions with variable declarations or statements");
+    return FALSE;
+}
+
+/* Session declarations are single, simple named scalar/pointer objects. GCC
+ * validates the actual type, while this parser rejects complex declarators. */
+static gint
+parse_session_declaration(
+    const gchar *code,
+    gchar **type,
+    gchar **name,
+    gchar **initializer,
+    GError **error
+){
+    g_autofree gchar *masked = NULL;
+    g_autoptr(GRegex) declaration = NULL;
+    g_autoptr(GMatchInfo) match = NULL;
+    gsize i;
+    gsize start;
+    gint depth;
+    gint declarations;
+    gint statements;
+
+    masked = mask_session_code(code);
+    if (masked == NULL)
+        goto unsupported;
+    declaration = g_regex_new(
+        "^\\s*((?:[A-Za-z_][A-Za-z_0-9]*\\s+)*"
+        "[A-Za-z_][A-Za-z_0-9]*(?:\\s+|\\s*(?:\\*\\s*)+))"
+        "([A-Za-z_][A-Za-z_0-9]*)\\s*(.*)$",
+        G_REGEX_DOTALL, 0, NULL);
+    depth = 0;
+    start = 0;
+    declarations = 0;
+    statements = 0;
+    for (i = 0; ; i++)
+    {
+        gchar c;
+
+        c = masked[i];
+        if (c == '(' || c == '[' || c == '{')
+            depth++;
+        if (c == ')' || c == ']' || c == '}')
+            depth--;
+        if (((c == ';' || c == '}') && depth == 0) || c == '\0')
+        {
+            g_autofree gchar *part = NULL;
+
+            part = g_strndup(masked + start, i - start);
+            if (g_strstrip(part)[0] != '\0')
+            {
+                statements++;
+                /* Control statements are not declarations. */
+                if (!g_regex_match_simple(
+                        "^(return|if|else|while|for|switch|do|goto|break|continue)\\b",
+                        part, 0, 0) &&
+                    (g_regex_match(declaration, part, 0, NULL) ||
+                     g_str_has_prefix(part, "g_auto") ||
+                     g_regex_match_simple("^(int|char|long|short|float|double|gint|gchar|guint|typeof|__typeof__)\\s*\\(", part, 0, 0) ||
+                     g_regex_match_simple("^[A-Za-z_][A-Za-z_0-9]*\\s*\\(\\s*\\*", part, 0, 0)))
+                    declarations++;
+            }
+            start = i + 1;
+        }
+        if (c == '\0')
+            break;
+    }
+    if (declarations == 0)
+        return 0;
+    if (declarations != 1 || statements != 1 ||
+        !g_regex_match(declaration, masked, 0, &match))
+        goto unsupported;
+    *type = g_match_info_fetch(match, 1);
+    *name = g_match_info_fetch(match, 2);
+    if (g_regex_match_simple(
+            "\\b(static|extern|register|auto|restrict|__thread|_Thread_local|g_auto[a-z]*)\\b",
+            *type, 0, 0) || g_str_has_prefix(*name, "_crispy_"))
+        goto unsupported;
+    {
+        gint pos;
+        gsize end;
+
+        g_match_info_fetch_pos(match, 3, &pos, NULL);
+        while (g_ascii_isspace(masked[pos]))
+            pos++;
+        end = strlen(masked);
+        while (end > (gsize)pos && g_ascii_isspace(masked[end - 1]))
+            end--;
+        if (end > (gsize)pos && masked[end - 1] == ';')
+            end--;
+        if (masked[pos] == '=')
+        {
+            gsize j;
+            gint nesting;
+
+            nesting = 0;
+            for (j = (gsize)pos + 1; j < end; j++)
+            {
+                if (masked[j] == '(')
+                    nesting++;
+                if (masked[j] == ')')
+                    nesting--;
+                if (masked[j] == '{' || masked[j] == '}' ||
+                    (masked[j] == ',' && nesting == 0))
+                    goto unsupported;
+            }
+            *initializer = g_strndup(code + pos + 1, end - pos - 1);
+        }
+        else if (masked[pos] != ';' && masked[pos] != '\0')
+            goto unsupported;
+    }
+    return 1;
+
+unsupported:
+    g_set_error(error, CRISPY_ERROR, CRISPY_ERROR_REPL,
+        "Unsupported session declaration: use one scalar or pointer declaration "
+        "per eval, without arrays, aggregates, function declarators, storage "
+        "qualifiers or cleanup attributes; use a brace block for local variables");
+    return -1;
+}
+
 gint
 crispy_repl_eval(
     CrispyRepl   *self,
@@ -995,16 +1288,37 @@ crispy_repl_eval(
     gchar   *so_path;
     gint     exit_code;
     GError  *local_error;
+    g_autofree gchar *trimmed = NULL;
+    g_autofree gchar *type = NULL;
+    g_autofree gchar *name = NULL;
+    g_autofree gchar *initializer = NULL;
+    gint declaration;
 
     g_return_val_if_fail(CRISPY_IS_REPL(self), -1);
     g_return_val_if_fail(code != NULL, -1);
+    trimmed = g_strdup(code);
+    code = g_strstrip(trimmed);
+    local_error = NULL;
+    self->eval_count++;
 
     /*
      * Preprocessor directives and function/type definitions are
-     * accumulated in the preamble rather than compiled immediately.
+     * validated before committing: a typo must not poison later inputs.
      */
     if (is_preamble_code(code))
     {
+        g_autofree gchar *candidate = NULL;
+
+        candidate = g_strconcat(self->preamble->str, "\n", code, "\n", NULL);
+        if (!validate_preamble(code, &local_error))
+            goto failed;
+        source = build_eval_source(candidate, "", FALSE);
+        so_path = try_compile_source(self, source, &local_error);
+        g_free(source);
+        if (so_path == NULL)
+            goto failed;
+        remove_session_artifact(so_path);
+        g_free(so_path);
         g_string_append(self->preamble, code);
         if (!text_ends_with_newline(code))
             g_string_append_c(self->preamble, '\n');
@@ -1014,8 +1328,57 @@ crispy_repl_eval(
         return 0;
     }
 
-    local_error = NULL;
-    self->eval_count++;
+    declaration = parse_session_declaration(code, &type, &name,
+                                            &initializer, &local_error);
+    if (declaration < 0)
+        goto failed;
+    if (declaration > 0)
+    {
+        g_autofree gchar *candidate = NULL;
+        g_autofree gchar *statement = NULL;
+        gpointer storage;
+
+        if (g_hash_table_contains(self->names, name))
+        {
+            g_set_error(&local_error, CRISPY_ERROR, CRISPY_ERROR_REPL,
+                        "Session variable '%s' already exists; assign or reset instead", name);
+            goto failed;
+        }
+        /* The initializer runs only in this entry function. Future modules
+         * contain a typed pointer to this static object, never its initializer. */
+        candidate = g_strdup_printf(
+            "%s\nstatic %s _crispy_value;\n"
+            "typedef char _crispy_session_requires_scalar_or_pointer["
+            "((__builtin_classify_type(_crispy_value) == 1 || "
+            "__builtin_classify_type(_crispy_value) == 5 || "
+            "__builtin_classify_type(_crispy_value) == 8 || "
+            "__builtin_classify_type(_crispy_value) == 9) && "
+            "__builtin_types_compatible_p(__typeof__(_crispy_value), "
+            "__typeof__(((void)0, _crispy_value)))) ? 1 : -1];\n"
+            "void *_crispy_get_storage(void) { return (void *)&_crispy_value; }\n"
+            "#define %s (_crispy_value)\n",
+            self->preamble->str, type, name);
+        statement = initializer != NULL
+            ? g_strdup_printf("%s = (%s);", name, initializer)
+            : g_strdup("");
+        source = build_eval_source(candidate, statement, FALSE);
+        so_path = try_compile_source(self, source, &local_error);
+        g_free(source);
+        if (so_path == NULL)
+            goto failed;
+        storage = NULL;
+        exit_code = execute_module(self, so_path, &storage, &local_error);
+        g_free(so_path);
+        if (local_error != NULL)
+            goto failed;
+        g_string_append_printf(self->preamble,
+            "\nstatic %s *_crispy_slot_%u;\n#define %s (*_crispy_slot_%u)\n",
+            type, self->storage->len, name, self->storage->len);
+        g_ptr_array_add(self->storage, storage);
+        g_hash_table_add(self->names, g_strdup(name));
+        g_signal_emit(self, obj_signals[SIGNAL_LINE_EVALUATED], 0, code, exit_code);
+        return exit_code;
+    }
 
     /*
      * Auto-print logic: if the code looks like a bare expression
@@ -1035,7 +1398,7 @@ crispy_repl_eval(
 
         if (so_path != NULL)
         {
-            exit_code = execute_module(so_path, &local_error);
+            exit_code = execute_module(self, so_path, NULL, &local_error);
             g_free(so_path);
 
             if (local_error == NULL)
@@ -1054,7 +1417,7 @@ crispy_repl_eval(
 
         if (so_path != NULL)
         {
-            exit_code = execute_module(so_path, &local_error);
+            exit_code = execute_module(self, so_path, NULL, &local_error);
             g_free(so_path);
 
             if (local_error == NULL)
@@ -1073,7 +1436,7 @@ crispy_repl_eval(
 
         if (so_path != NULL)
         {
-            exit_code = execute_module(so_path, &local_error);
+            exit_code = execute_module(self, so_path, NULL, &local_error);
             g_free(so_path);
 
             if (local_error == NULL)
@@ -1117,6 +1480,7 @@ crispy_repl_eval(
 
     if (so_path == NULL)
     {
+failed:
         /* compilation failed — report the error */
         g_signal_emit(self, obj_signals[SIGNAL_ERROR_OCCURRED],
                       0, code, local_error);
@@ -1129,7 +1493,7 @@ crispy_repl_eval(
         return -1;
     }
 
-    exit_code = execute_module(so_path, &local_error);
+    exit_code = execute_module(self, so_path, NULL, &local_error);
     g_free(so_path);
 
     if (local_error != NULL)
@@ -1346,7 +1710,7 @@ handle_meta_command(
             return TRUE;
         }
 
-        execute_module(so_path_type, NULL);
+        execute_module(self, so_path_type, NULL, NULL);
         return TRUE;
     }
 
@@ -1364,7 +1728,7 @@ crispy_repl_start(
 ){
     gchar    *line;
     GString  *accum;
-    gint      depth;
+    gboolean  needs_continuation;
     gint      eval_result;
 
     g_return_val_if_fail(CRISPY_IS_REPL(self), FALSE);
@@ -1372,7 +1736,7 @@ crispy_repl_start(
     (void)error;
 
     accum = g_string_new(NULL);
-    depth = 0;
+    needs_continuation = FALSE;
 
     /* welcome banner */
     g_print("Crispy REPL v%s — C expressions, compiled and executed.\n",
@@ -1395,7 +1759,7 @@ crispy_repl_start(
     {
         const gchar *prompt;
 
-        prompt = (depth > 0) ? self->cont_prompt : self->prompt;
+        prompt = needs_continuation ? self->cont_prompt : self->prompt;
 
         line = readline(prompt);
 
@@ -1409,27 +1773,23 @@ crispy_repl_start(
         /*
          * Skip empty lines at top level.  In multiline mode a blank
          * line forces evaluation of the accumulated input instead
-         * (Python-style): a typo that unbalances the depth tracker
-         * (e.g. an unclosed paren hidden inside a string literal)
-         * would otherwise trap the REPL in continuation mode forever.
+         * so unfinished literals or delimiters cannot trap the user
+         * in continuation mode forever.
          * Forcing the eval lets gcc report the real error and returns
          * to a fresh prompt.
          */
         if (line[0] == '\0')
         {
-            if (depth == 0)
+            if (!needs_continuation)
             {
                 free(line);
                 continue;
             }
 
-            /* fall through: append the blank line (a no-op for the
-             * depth) and let the depth <= 0 path below evaluate */
-            depth = 0;
         }
 
         /* exit commands */
-        if (depth == 0 &&
+        if (!needs_continuation &&
             (strcmp(line, "exit") == 0 ||
              strcmp(line, "quit") == 0 ||
              strcmp(line, ":quit") == 0 ||
@@ -1440,7 +1800,7 @@ crispy_repl_start(
         }
 
         /* meta-commands (only when not in multiline mode) */
-        if (depth == 0 && line[0] == ':')
+        if (!needs_continuation && line[0] == ':')
         {
             g_autofree gchar *trimmed = NULL;
 
@@ -1469,17 +1829,16 @@ crispy_repl_start(
             g_string_append_c(accum, '\n');
         g_string_append(accum, line);
 
-        depth += compute_depth_delta(line);
+        /* Rescan the complete input: comments and literals span lines.
+         * A blank input line deliberately bypasses the continuation hint. */
+        needs_continuation = line[0] != '\0' &&
+                            crispy_repl_needs_continuation(accum->str);
 
-        /* keep accumulating if braces are not balanced */
-        if (depth > 0)
+        if (needs_continuation)
         {
             free(line);
             continue;
         }
-
-        /* reset depth (might go negative from typos) */
-        depth = 0;
 
         /* add complete input to history */
         if (accum->len > 0)

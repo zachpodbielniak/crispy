@@ -1466,13 +1466,51 @@ crispy_repl_eval(CrispyRepl   *self,
 
 Evaluates C code without the interactive loop -- the entry point for embedding the REPL. Directives accumulate into the preamble; statements are wrapped, compiled, loaded, and run. Compilation failures come back through =error= carrying the compiler's diagnostic text.
 
+Persistence belongs to =CrispyRepl= itself: keep one instance per session and call this same API for every input. No consumer-side replay, wrapper API, or result object is needed. A simple scalar or pointer declaration creates stable session storage; its initializer runs exactly once, including runtime calls such as =g_strdup()=. Later assignments, increments, pointer dereferences, and address-taking operate on that same object. Declarations without initializers are zero-initialized. Compilation failures, including invalid preamble additions, leave the accepted state unchanged.
+
+Each successful executable module is retained with local symbol visibility until reset/finalization, including modules that only assign a string literal to an existing pointer. Later modules use typed module-local bound pointers and generated lvalue macros, not global symbol lookup. Unique module artifacts prevent the loader from sharing writable data between sessions, even with the same cache and identical inputs; these artifacts and their dependency sidecars are removed after loading or validation. Memory use grows with executed inputs until reset.
+
+**** Supported Grammar
+
+Submit one declaration per call: a named arithmetic scalar or pointer, optionally initialized by an expression, for example =gint count = 0;=, =gchar *name = "blah";=, or =gchar *copy = g_strdup(name);=. Ordinary typedef names and pointers to named structs work. Arrays, by-value structs/unions, multiple declarators, mixed declarations and statements, function-pointer declarator syntax, storage-class specifiers, cleanup attributes, and brace initializers are unsupported session declarations and produce an error. Initialized top-level const objects are not supported; pointers to const data are supported. Use an explicit ={ ... }= block for ordinary temporary C locals and complex declarations. This is a restricted lexical declaration parser, not a complete C frontend; macro-generated declarations and exotic declarator syntax are not supported.
+
+Submit one complete preprocessor directive, type definition, or function definition per call. They persist as validated source, not retained function identity: helper-function static locals are not session variables and may be recreated in each module. Functions can access variables declared before their definition. Generated variable macros reserve their names throughout later source, so do not reuse those names as function parameters, local variables, members, or macros; =_crispy_= names are reserved for the evaluator. Forward dependencies must compile when submitted, and split conditional-preprocessor blocks are not supported.
+
+**** In-Process Safety
+
+Evaluation runs trusted native C inside the embedding process, with its full permissions and shared libraries; session symbol isolation is not a security sandbox. Undefined behavior, invalid pointers, =exit()=, signals, and user callbacks can crash or terminate the host. Runtime side effects are not rolled back, including when user code returns a nonzero status. Serialize eval/reset/free on a session; reentrant evaluation or resetting/freeing during execution is unsupported. Disconnect callbacks, stop threads, and release heap/GObject resources before reset/free. Crispy owns variable storage and module mappings, but never guesses ownership of pointer targets. All escaped pointers to session storage, module literals, or functions become invalid after reset/free.
+
 *Parameters:*
 
 - =self= -- a CrispyRepl
 - =code= -- C code to evaluate (may be multiple lines)
 - =error= -- return location for a GError, or NULL
 
-*Returns:* the exit code of the evaluated code (0 = success), or -1 on error
+*Returns:* the C exit code (normally 0), or -1 with =GError= set on evaluator failure. User code can itself =return -1;= without an error, so embedding callers that need to distinguish the cases must inspect =GError=. Signals keep the existing =line-evaluated(code, exit_code)= and =error-occurred(code, error)= contract.
+
+*** crispy_repl_needs_continuation
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_needs_continuation
+:END:
+#+begin_src C
+gboolean crispy_repl_needs_continuation(const gchar *code);
+#+end_src
+
+Returns whether an interactive caller should collect another line of C. Pass the entire accumulated input, including newlines, not just the newest line; no REPL instance, compilation, or mutable lexical state is needed. The helper tracks properly nested =()=, ={}= and =[]=, escaped string/character literals, line comments, and multiline block comments. It handles backslash-newline splicing (LF or CRLF) before recognizing comments and literals. Unclosed delimiters, literals, block comments, a trailing splice, or a final significant equals sign, comma, or backslash return true. Whitespace and comments are ignored when finding that final token. A completed declaration such as =gint count = 0;= returns false.
+
+Empty input and mismatched closing delimiters return false; malformed input should reach the compiler rather than trapping the prompt in continuation mode. This is a lexical prompt hint, not a C parser: it does not expand macros, require semicolons, or recognize every incomplete expression or control-flow statement. =code= must be non-NULL. =crispy_repl_start()= uses this helper directly and retains its blank-line override to force evaluation of pending input.
+
+*** crispy_repl_has_variable
+:PROPERTIES:
+:CUSTOM_ID: crispy_repl_has_variable
+:END:
+#+begin_src C
+gboolean crispy_repl_has_variable(CrispyRepl *self, const gchar *name);
+#+end_src
+
+Returns whether the exact, case-sensitive, non-NULL identifier =name= belongs to the current session variable registry. This is a read-only lookup of successfully committed declarations, not a source parser or an evaluation. Assignments and increments retain membership; failed declarations never add membership; reset removes all membership. Names in other sessions, temporary block locals, preamble macros, typedefs and functions do not match. An empty name returns false. Serialize lookup with eval/reset on the same instance.
+
+An embedding interactive shell can identify an input's variable name, ask this API whether it is a C session variable, then route inputs such as =count++;= or =count = 2;= to the same =crispy_repl_eval()= instance without maintaining its own variable metadata. Continuation and routing are opt-in embedding policy; these helpers do not change script execution or create a session automatically.
 
 *** crispy_repl_set_prompt / get_prompt
 :PROPERTIES:
@@ -1506,7 +1544,7 @@ void
 crispy_repl_reset(CrispyRepl *self);
 #+end_src
 
-Clears the accumulated preamble and resets session state. Backs the =:clear= command.
+Clears the accumulated preamble and variable bindings and unloads retained modules in reverse order. Heap objects referenced by pointers are not automatically freed. Backs the =:clear= command; finalization performs the same cleanup. See the lifetime rules above before retaining any addresses outside an evaluation.
 
 *** crispy_repl_get_preamble
 :PROPERTIES:
@@ -1517,7 +1555,7 @@ const gchar *
 crispy_repl_get_preamble(CrispyRepl *self);
 #+end_src
 
-The accumulated preamble -- includes, defines, functions, types. Backs the =:preamble= command.
+The accumulated preamble -- includes, defines, functions, types, and generated variable bindings. Backs the =:preamble= command. This is diagnostic source, not a serializable session or a replay log.
 
 *Returns:* (transfer none) the preamble string
 

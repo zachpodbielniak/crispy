@@ -61,11 +61,52 @@ gboolean crispy_repl_start (CrispyRepl  *self,
  * loaded, and executed.  Compilation errors are reported via @error
  * with the gcc diagnostic text.
  *
- * Returns: the exit code of the evaluated code (0 = success), or -1 on error
+ * One simple scalar or pointer declaration per call creates session storage.
+ * Initializers execute once; later evaluations share the same address and
+ * mutations. Unsupported declarators return an error; explicit brace blocks
+ * still use ordinary local variables. Modules, including string literals,
+ * remain loaded until reset or finalization. Failed compilation does not
+ * change session state. Includes/types/functions persist as validated source.
+ *
+ * This executes trusted native code in-process, not in a sandbox. Serialize
+ * calls on a session and never reset/free it while its code or callbacks run.
+ * Pointer targets remain caller-owned; release them before resetting.
+ *
+ * Returns: the C exit code (normally 0), or -1 with @error set on failure.
+ *   User code may itself return -1 without setting @error.
  */
 gint crispy_repl_eval (CrispyRepl   *self,
-                        const gchar  *code,
-                        GError      **error);
+                         const gchar  *code,
+                         GError      **error);
+
+/**
+ * crispy_repl_needs_continuation:
+ * @code: complete accumulated C input, including any embedded newlines
+ *
+ * Lexically checks delimiters, escaped string/character literals, comments,
+ * and escaped newlines. Open delimiters/literals/block comments and trailing
+ * '=', ',' or backslash request more input. Whitespace and comments do not
+ * hide a trailing operator. Mismatched closing delimiters return %FALSE so
+ * the compiler can diagnose them. This is a prompt hint, not C validation;
+ * it does not expand macros or recognize every incomplete C construct.
+ *
+ * Returns: %TRUE if the caller should collect another line, otherwise %FALSE
+ */
+gboolean crispy_repl_needs_continuation (const gchar *code);
+
+/**
+ * crispy_repl_has_variable:
+ * @self: a #CrispyRepl
+ * @name: exact, case-sensitive variable identifier to look up
+ *
+ * Looks up a successfully declared session variable without evaluating code
+ * or changing state. Failed declarations, block locals, preamble macros,
+ * types and functions are not session variables. Reset clears the registry.
+ * Serialize this lookup with evaluation and reset on the same session.
+ *
+ * Returns: %TRUE if @name is a current session variable, otherwise %FALSE
+ */
+gboolean crispy_repl_has_variable (CrispyRepl *self, const gchar *name);
 
 /**
  * crispy_repl_set_prompt:
@@ -102,7 +143,9 @@ void crispy_repl_set_extra_flags (CrispyRepl  *self,
  * crispy_repl_reset:
  * @self: a #CrispyRepl
  *
- * Clears the accumulated preamble and resets the REPL state.
+ * Clears the accumulated preamble and variables, and unloads retained modules
+ * in reverse order. Addresses into session storage, literals and functions
+ * become invalid. Does not free heap objects referenced by session pointers.
  */
 void crispy_repl_reset (CrispyRepl *self);
 
@@ -110,7 +153,8 @@ void crispy_repl_reset (CrispyRepl *self);
  * crispy_repl_get_preamble:
  * @self: a #CrispyRepl
  *
- * Returns the accumulated preamble (includes, defines, functions, etc.).
+ * Returns the accumulated preamble, including generated variable bindings.
+ * This is diagnostic source, not a serializable session or replay log.
  *
  * Returns: (transfer none): the preamble string
  */

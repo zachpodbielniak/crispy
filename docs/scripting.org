@@ -618,8 +618,28 @@ not execute. They accumulate in a *preamble* prepended to every later
 evaluation, which is why the =#include= and the =square()= above stay
 available. Statements run immediately.
 
-Input that is not yet complete -- unbalanced braces or parentheses --
-continues onto the next line; a blank line evaluates what is pending.
+Scalar and pointer variables persist through the same =CrispyRepl= API used by the prompt and embedders. Initializers and prior statements are never replayed:
+
+#+begin_example
+crispy> gchar *name = "blah";
+crispy> g_print("%s\n", name);
+blah
+crispy> gint count = 0;
+crispy> count++;
+crispy> count
+=> 1
+crispy> gchar *copy = g_strdup(name);
+crispy> copy[0] = 'B';
+crispy> g_print("%s\n", copy);
+Blah
+crispy> g_free(copy); copy = NULL;
+#+end_example
+
+Use one simple scalar/pointer declaration per input, or an explicit brace block for temporary locals. Arrays, aggregates by value, multiple declarators, mixed declarations/statements, storage qualifiers, cleanup attributes, and complex declarators are rejected as session variables. Submit preamble definitions one at a time. Helper functions persist as source, so their static locals do not have session-storage guarantees. Variable names become macros in later source and must not be reused as local/parameter/member names. See [[file:api.org::#crispy_repl_eval][the eval API]] for the exact limits.
+
+Successful modules stay loaded to keep storage, code, and string literals alive. =:clear= or freeing the REPL unloads them and invalidates their addresses, but does not free heap allocations referenced by pointers. Free owned resources and disconnect callbacks first. This is trusted native C running inside the host process, not a sandbox; crashes and runtime side effects cannot be undone. Calls on the same session must not overlap or reenter it.
+
+Input with open parentheses, braces, brackets, string/character literals, or block comments continues onto the next line, as does input ending in an equals sign, comma, or backslash. Escapes and comments are tracked across the complete accumulated input. A completed semicolon declaration does not request continuation. Mismatched closing delimiters go straight to the compiler; a blank line forces evaluation of whatever is pending. Embedders can reuse the same lexical decision through =crispy_repl_needs_continuation()= and query session variable membership through =crispy_repl_has_variable()= without duplicating Crispy state.
 
 | Command               | Effect                                     |
 |-----------------------+--------------------------------------------|
