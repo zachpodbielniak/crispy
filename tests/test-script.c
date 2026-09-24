@@ -603,6 +603,54 @@ test_script_profile(void)
     g_rmdir(tmpdir);
 }
 
+/* test: load-only runs no main() and exposes exported symbols */
+static void
+test_script_load_lookup(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(CrispyScript) script = NULL;
+    g_autofree gchar *path = NULL;
+    gint (*add)(gint, gint);
+    gpointer symbol;
+
+    /* no main(): only valid for crispy_script_load() */
+    path = write_temp_script(
+        "#include <gmodule.h>\n"
+        "G_MODULE_EXPORT gint add_numbers(gint a, gint b){\n"
+        "    return a + b;\n"
+        "}\n");
+
+    script = crispy_script_new_from_file(
+        path,
+        CRISPY_COMPILER(g_compiler),
+        CRISPY_CACHE_PROVIDER(g_cache),
+        CRISPY_FLAG_FORCE_COMPILE,
+        &error);
+    g_assert_no_error(error);
+
+    /* nothing resolves before the module is loaded */
+    g_assert_false(crispy_script_lookup_symbol(script, "add_numbers", &symbol));
+    g_assert_null(symbol);
+
+    crispy_script_load(script, &error);
+    g_assert_no_error(error);
+
+    g_assert_true(crispy_script_lookup_symbol(script, "add_numbers", &symbol));
+    add = (gint (*)(gint, gint))symbol;
+    g_assert_cmpint(add(20, 22), ==, 42);
+    g_assert_false(crispy_script_lookup_symbol(script, "missing_symbol", &symbol));
+
+    /* a second load reuses the cache and keeps symbols valid */
+    g_assert_true(crispy_script_load(script, &error));
+    g_assert_true(crispy_script_lookup_symbol(script, "add_numbers", &symbol));
+
+    /* execute() still insists on main() */
+    g_assert_cmpint(crispy_script_execute(script, 0, NULL, &error), ==, -1);
+    g_assert_error(error, CRISPY_ERROR, CRISPY_ERROR_NO_MAIN);
+
+    g_unlink(path);
+}
+
 gint
 main(
     gint    argc,
@@ -628,6 +676,8 @@ main(
                     test_script_from_file_hello);
     g_test_add_func("/script/from-file-exit-code",
                     test_script_from_file_exit_code);
+    g_test_add_func("/script/load-lookup",
+                    test_script_load_lookup);
     g_test_add_func("/script/from-inline",
                     test_script_from_inline);
     g_test_add_func("/script/crispy-params",

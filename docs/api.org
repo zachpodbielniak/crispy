@@ -844,6 +844,57 @@ Executes the full pipeline: hash, cache check, compile (if needed), load, run ma
 
 *Returns:* the script's exit code, or -1 on error
 
+*** crispy_script_load
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_load
+:END:
+#+begin_src C
+gboolean
+crispy_script_load(CrispyScript  *self,
+                   GError       **error);
+#+end_src
+
+Runs the same pipeline as =crispy_script_execute()= (hash, cache check, compile if needed, load, with every plugin hook up to =MODULE_LOADED=) but stops once the shared object is loaded. It never calls =main()=, so a script loaded this way does not need one. This is the entry point for embedding hosts (for example a game engine plugin loader) that resolve their own exported functions with =crispy_script_lookup_symbol()=. Loading again replaces the previous module; the module stays loaded until the script is finalized.
+
+*Parameters:*
+
+- =self= -- a CrispyScript
+- =error= -- return location for a GError, or NULL
+
+*Returns:* TRUE when the module is loaded
+
+#+begin_src C
+/* plugin.c exports a function instead of main() */
+G_MODULE_EXPORT gint add_numbers(gint a, gint b){ return a + b; }
+
+/* host */
+gpointer sym;
+if (crispy_script_load(script, &error) &&
+    crispy_script_lookup_symbol(script, "add_numbers", &sym))
+    g_print("%d\n", ((gint (*)(gint, gint))sym)(20, 22));
+#+end_src
+
+*** crispy_script_lookup_symbol
+:PROPERTIES:
+:CUSTOM_ID: crispy_script_lookup_symbol
+:END:
+#+begin_src C
+gboolean
+crispy_script_lookup_symbol(CrispyScript  *self,
+                            const gchar   *symbol_name,
+                            gpointer      *symbol);
+#+end_src
+
+Resolves a symbol exported by the loaded module (=G_MODULE_EXPORT=). Only valid after =crispy_script_load()= or =crispy_script_execute()= succeeded; before that it returns FALSE and sets =*symbol= to NULL.
+
+*Parameters:*
+
+- =self= -- a CrispyScript
+- =symbol_name= -- the exported symbol name
+- =symbol= -- (out) return location for the address
+
+*Returns:* TRUE if the symbol was found
+
 *** crispy_script_get_exit_code
 :PROPERTIES:
 :CUSTOM_ID: crispy_script_get_exit_code

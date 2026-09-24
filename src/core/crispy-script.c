@@ -750,11 +750,26 @@ run_profiled(
 
 /* --- execution --- */
 
-gint
-crispy_script_execute(
+/*
+ * script_run:
+ * @self: a #CrispyScript
+ * @argc: argument count forwarded to main()
+ * @argv: argument vector forwarded to main()
+ * @run_main: %TRUE to look up and call main(), %FALSE to stop once the
+ *   module is loaded (embedding hosts then resolve their own symbols)
+ * @error: return location for a #GError
+ *
+ * The shared compile/cache/load pipeline behind crispy_script_execute()
+ * and crispy_script_load().
+ *
+ * Returns: main()'s exit code, 0 after a load-only run, or -1 on error
+ */
+static gint
+script_run(
     CrispyScript  *self,
     gint           argc,
     gchar        **argv,
+    gboolean       run_main,
     GError       **error
 ){
     CrispyScriptPrivate *priv;
@@ -1060,8 +1075,13 @@ crispy_script_execute(
             return -1;
     }
 
-    /* load the compiled shared object */
+    /* load the compiled shared object, replacing any earlier load */
     t_phase = g_get_monotonic_time();
+    if (priv->module != NULL)
+    {
+        g_module_close(priv->module);
+        priv->module = NULL;
+    }
     priv->module = g_module_open(cached_so_path, G_MODULE_BIND_LAZY);
     if (priv->module == NULL)
     {
@@ -1081,6 +1101,13 @@ crispy_script_execute(
     hook_result = dispatch_hook(priv, CRISPY_HOOK_MODULE_LOADED, &ctx);
     if (hook_result == CRISPY_HOOK_ABORT)
         return -1;
+
+    /* load-only callers resolve their own entry points */
+    if (!run_main)
+    {
+        priv->exit_code = 0;
+        return 0;
+    }
 
     /* look up the main symbol */
     main_func = NULL;
@@ -1120,6 +1147,50 @@ crispy_script_execute(
         return -1;
 
     return priv->exit_code;
+}
+
+gint
+crispy_script_execute(
+    CrispyScript  *self,
+    gint           argc,
+    gchar        **argv,
+    GError       **error
+){
+    g_return_val_if_fail(CRISPY_IS_SCRIPT(self), -1);
+
+    return script_run(self, argc, argv, TRUE, error);
+}
+
+gboolean
+crispy_script_load(
+    CrispyScript  *self,
+    GError       **error
+){
+    g_return_val_if_fail(CRISPY_IS_SCRIPT(self), FALSE);
+
+    return script_run(self, 0, NULL, FALSE, error) == 0;
+}
+
+gboolean
+crispy_script_lookup_symbol(
+    CrispyScript  *self,
+    const gchar   *symbol_name,
+    gpointer      *symbol
+){
+    CrispyScriptPrivate *priv;
+
+    g_return_val_if_fail(CRISPY_IS_SCRIPT(self), FALSE);
+    g_return_val_if_fail(symbol_name != NULL, FALSE);
+    g_return_val_if_fail(symbol != NULL, FALSE);
+
+    priv = crispy_script_get_instance_private(self);
+    *symbol = NULL;
+
+    /* nothing is resolvable before a successful load or execute */
+    if (priv->module == NULL)
+        return FALSE;
+
+    return g_module_symbol(priv->module, symbol_name, symbol);
 }
 
 gint

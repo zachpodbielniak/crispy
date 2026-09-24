@@ -95,6 +95,38 @@ gint crispy_script_execute (CrispyScript  *self,
                             GError       **error);
 
 /**
+ * crispy_script_load:
+ * @self: a #CrispyScript
+ * @error: return location for a #GError, or %NULL
+ *
+ * Runs the same pipeline as crispy_script_execute() (hash, cache check,
+ * compile if needed, load) but stops once the shared object is loaded
+ * and never calls main().  Scripts loaded this way need no main(); an
+ * embedding host resolves its own entry points with
+ * crispy_script_lookup_symbol().  The module stays loaded until @self is
+ * finalized or loaded again.
+ *
+ * Returns: %TRUE when the module is loaded
+ */
+gboolean crispy_script_load (CrispyScript  *self,
+                             GError       **error);
+
+/**
+ * crispy_script_lookup_symbol:
+ * @self: a #CrispyScript
+ * @symbol_name: the exported symbol to resolve
+ * @symbol: (out) (nullable): return location for the symbol address
+ *
+ * Resolves a symbol exported by the loaded script module.  Only valid after
+ * crispy_script_load() or crispy_script_execute() succeeded.
+ *
+ * Returns: %TRUE if the symbol was found
+ */
+gboolean crispy_script_lookup_symbol (CrispyScript  *self,
+                                      const gchar   *symbol_name,
+                                      gpointer      *symbol);
+
+/**
  * crispy_script_get_exit_code:
  * @self: a #CrispyScript
  *
