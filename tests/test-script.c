@@ -639,6 +639,10 @@ test_script_load_lookup(void)
     add = (gint (*)(gint, gint))symbol;
     g_assert_cmpint(add(20, 22), ==, 42);
     g_assert_false(crispy_script_lookup_symbol(script, "missing_symbol", &symbol));
+    /* names from the script's libraries are not the script's symbols */
+    g_assert_false(crispy_script_lookup_symbol(script, "g_free", &symbol));
+    g_assert_null(symbol);
+    g_assert_false(crispy_script_lookup_symbol(script, "printf", &symbol));
 
     /* a second load reuses the cache and keeps symbols valid */
     g_assert_true(crispy_script_load(script, &error));

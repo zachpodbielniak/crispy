@@ -1,6 +1,9 @@
 /* crispy-script.c - Script lifecycle orchestrator */
 
 #ifndef CRISPY_COMPILATION
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* dladdr() */
+#endif
 #define CRISPY_COMPILATION
 #endif
 #include "crispy-script.h"
@@ -20,6 +23,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <dlfcn.h>
 
 /**
  * SECTION:crispy-script
@@ -1082,7 +1087,8 @@ script_run(
         g_module_close(priv->module);
         priv->module = NULL;
     }
-    priv->module = g_module_open(cached_so_path, G_MODULE_BIND_LAZY);
+    /* Local binding: one script's exported names never satisfy another's */
+    priv->module = g_module_open(cached_so_path, G_MODULE_BIND_LAZY | G_MODULE_BIND_LOCAL);
     if (priv->module == NULL)
     {
         g_set_error(error,
@@ -1171,6 +1177,35 @@ crispy_script_load(
     return script_run(self, 0, NULL, FALSE, error) == 0;
 }
 
+/*
+ * symbol_in_module:
+ * @module: the module the symbol was looked up in
+ * @symbol: the address g_module_symbol() returned
+ *
+ * dlsym() on a module handle also searches the module's dependencies
+ * (libc, GLib, ...), so a name like "g_free" would resolve.  Accept only
+ * symbols defined by the module's own file.
+ */
+static gboolean
+symbol_in_module(
+    GModule  *module,
+    gpointer  symbol
+){
+    Dl_info info;
+    gchar *mine;
+    gchar *owner;
+    gboolean same;
+
+    if (dladdr(symbol, &info) == 0 || info.dli_fname == NULL || g_module_name(module) == NULL)
+        return FALSE;
+    mine = realpath(g_module_name(module), NULL);
+    owner = realpath(info.dli_fname, NULL);
+    same = mine != NULL && owner != NULL && strcmp(mine, owner) == 0;
+    free(mine);
+    free(owner);
+    return same;
+}
+
 gboolean
 crispy_script_lookup_symbol(
     CrispyScript  *self,
@@ -1190,7 +1225,14 @@ crispy_script_lookup_symbol(
     if (priv->module == NULL)
         return FALSE;
 
-    return g_module_symbol(priv->module, symbol_name, symbol);
+    if (!g_module_symbol(priv->module, symbol_name, symbol))
+        return FALSE;
+    /* only the script's own definitions, never its libraries' */
+    if (!symbol_in_module(priv->module, *symbol)) {
+        *symbol = NULL;
+        return FALSE;
+    }
+    return TRUE;
 }
 
 gint

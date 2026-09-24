@@ -885,7 +885,7 @@ crispy_script_lookup_symbol(CrispyScript  *self,
                             gpointer      *symbol);
 #+end_src
 
-Resolves a symbol exported by the loaded module (=G_MODULE_EXPORT=). Only valid after =crispy_script_load()= or =crispy_script_execute()= succeeded; before that it returns FALSE and sets =*symbol= to NULL.
+Resolves a symbol exported by the loaded module (=G_MODULE_EXPORT=). Only valid after =crispy_script_load()= or =crispy_script_execute()= succeeded; before that it returns FALSE and sets =*symbol= to NULL. Only symbols defined by the script's own shared object resolve: names from the libraries it links (=g_free=, =printf=) return FALSE, and modules are opened with local binding, so two scripts exporting the same name never satisfy each other's references. Scripts with byte-identical source share one cached module (and its static data) within a process.
 
 *Parameters:*
 
