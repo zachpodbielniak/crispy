@@ -1,9 +1,13 @@
 /* crispy-script.c - Script lifecycle orchestrator */
 
-#ifndef CRISPY_COMPILATION
+/* dladdr() / Dl_info need _GNU_SOURCE before any system header.  Not
+   inside the CRISPY_COMPILATION guard below: an embedder that compiles
+   crispy's sources with -DCRISPY_COMPILATION (bacon does) would skip it. */
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE /* dladdr() */
+#define _GNU_SOURCE
 #endif
+
+#ifndef CRISPY_COMPILATION
 #define CRISPY_COMPILATION
 #endif
 #include "crispy-script.h"
