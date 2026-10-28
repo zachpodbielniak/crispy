@@ -181,6 +181,37 @@ BREAKING CHANGE: compute_hash signature changed; all callers must wrap
 source content in GBytes.
 ```
 
+### Pushing
+
+Do not push unless asked, except that a version bump is always pushed with its tag (see Versioning).
+
+## Versioning
+
+The version lives in `config.mk` (`VERSION_MAJOR`, `VERSION_MINOR`, `VERSION_MICRO`) and every release on master carries an annotated tag `v<MAJOR>.<MINOR>.<MICRO>` (e.g. `v0.2.1`) on the commit that sets it.
+
+- **Micro** (+1): every change landing on master that changes what is built: bug fixes, patches, small features, options, polish (`fix`, `perf`, small `feat`, `refactor`, `build`). Changes that touch only docs, tests or tooling (`docs`, `test`, `style`, `chore`) do not bump; they ride with the next release.
+- **Minor** (+1, micro back to 0): a major feature (a new subsystem, a new interface or backend, a new CLI mode), or anything that breaks compatibility with earlier versions (public C API/ABI, plugin hook types or `crispy-plugin.h`, CLI flags, cache layout, config file format). Any `!` commit is at least a minor.
+- **Major**: never bumped without asking the user first.
+- Unlike librewow there is no separate `API_VERSION`/`SO_VERSION`: both derive from these numbers. The soname is `libcrispy.so.$(VERSION_MAJOR)`, and `GIR_VERSION` is `MAJOR.MINOR`, so **a minor bump renames the GIR namespace** (`Crispy-0.2` -> `Crispy-0.3`). Say so in the commit message of a minor bump; anything requiring `Crispy` by version must follow.
+
+One bump per landing, the highest kind it contains: a merge that brings in several commits bumps once (minor if any of them is a major feature or a break, else micro).
+
+- **Every landing is released at once.** Each landing on master that changes the build bumps, is tagged and pushed immediately; nothing that changes the build waits on master untagged for a later release.
+- **Merging a branch** (the usual case, from a `trees/` worktree): bump in the merge commit itself, so the tag marks the merge and the branch never carries a version:
+
+  ```bash
+  git merge --no-ff --no-commit feat/x     # resolve conflicts if any
+  $EDITOR config.mk                        # bump VERSION_MINOR or VERSION_MICRO
+  make clean all && make test              # zero warnings, all tests pass
+  git commit                               # merge message names the new version
+  git tag -a v0.3.0 -m 'v0.3.0'
+  git push origin master v0.3.0
+  ```
+
+  Fast-forward merges have no commit to hold the bump; use `--no-ff`. A merge that lands only docs/tests may fast-forward and is not tagged.
+- **Working directly on master**: bump `config.mk` in the change's own commit (or, for a run of commits, in the last one), then tag that commit and push it with the tag.
+- Tag only a commit whose `config.mk` matches the tag, after `make clean all` and `make test` pass with zero warnings; never move or delete a pushed tag; a broken release is fixed by the next micro.
+
 ## Testing
 
 All tests use the GLib GTest framework. Run with `make test`. Each test binary is standalone and linked against `libcrispy.so`.
