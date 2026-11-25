@@ -37,7 +37,9 @@ GIRDIR ?= $(DATADIR)/gir-1.0
 TYPELIBDIR ?= $(LIBDIR)/girepository-1.0
 
 # Build directories
-BUILDDIR := build
+# Overridable so an embedder can keep one build per configuration (libregnum
+# passes BUILDDIR=<its build dir>/deps/crispy for each cross target)
+BUILDDIR ?= build
 OBJDIR_DEBUG := $(BUILDDIR)/debug/obj
 OBJDIR_RELEASE := $(BUILDDIR)/release/obj
 BINDIR_DEBUG := $(BUILDDIR)/debug
