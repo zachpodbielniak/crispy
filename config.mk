@@ -9,7 +9,7 @@
 # Version
 VERSION_MAJOR := 0
 VERSION_MINOR := 2
-VERSION_MICRO := 0
+VERSION_MICRO := 1
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
 # Installation directories
@@ -37,7 +37,9 @@ GIRDIR ?= $(DATADIR)/gir-1.0
 TYPELIBDIR ?= $(LIBDIR)/girepository-1.0
 
 # Build directories
-BUILDDIR := build
+# Overridable so an embedder can keep one build per configuration (libregnum
+# passes BUILDDIR=<its build dir>/deps/crispy for each cross target)
+BUILDDIR ?= build
 OBJDIR_DEBUG := $(BUILDDIR)/debug/obj
 OBJDIR_RELEASE := $(BUILDDIR)/release/obj
 BINDIR_DEBUG := $(BUILDDIR)/debug
